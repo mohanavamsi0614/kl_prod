@@ -1,0 +1,65 @@
+# Node modules
+node_modules
+*/node_modules
+npm-debug.log
+yarn-error.log
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Development files
+.git
+.gitignore
+.vscode
+.idea
+*.md
+!README.md
+
+# Build outputs (will be rebuilt in Docker)
+dist
+*/dist
+build
+*/build
+.next
+
+# Frontend source (except Frontend folder which we need)
+# public
+
+# Test files
+*.test.js
+*.test.ts
+*.spec.js
+*.spec.ts
+__tests__
+coverage
+.coverage
+
+# CI/CD
+.github
+.gitlab-ci.yml
+.travis.yml
+
+# Logs
+logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+tmp
+temp
+*.tmp
+*.swp
+*.swo
+
+# Keys and credentials
+keys/
+*.pem
+*.key
+*.cert
+service-account.json
+```

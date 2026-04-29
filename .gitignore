@@ -1,0 +1,7 @@
+.env
+node_modules/
+dist/
+server.log
+/service-account.json
+
+/public/assets

@@ -1,0 +1,221 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              String             @id @default(uuid()) @db.Uuid
+  firstName       String             @map("first_name") @db.VarChar(255)
+  lastName        String?            @map("last_name") @db.VarChar(255)
+  email           String?            @unique @db.VarChar(255)
+  whatsappPhone   String             @unique @map("whatsapp_phone") @db.VarChar(50)
+  passwordHash    String?            @map("password_hash") @db.VarChar(255)
+  createdAt       DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  fileAssets      FileAsset[]
+  sharedFilesBy   FileShare[]        @relation("FileSharedByUser")
+  sharedFiles     FileShare[]        @relation("FileSharedWithUser")
+  sharedFoldersBy FolderShare[]      @relation("SharedByUser")
+  sharedFolders   FolderShare[]      @relation("SharedWithUser")
+  folders         Folder[]
+  tokens          ServiceToken[]
+  taskLists       TaskList[]
+  tasks           Task[]
+  identities      UserAuthIdentity[]
+
+  @@index([email])
+  @@index([whatsappPhone])
+  @@map("users")
+}
+
+model ServiceToken {
+  id                    String   @id @default(uuid()) @db.Uuid
+  userId                String   @map("user_id") @db.Uuid
+  service               String   @db.VarChar(50)
+  accountEmail          String   @map("account_email") @db.VarChar(255)
+  encryptedAccessToken  String   @map("encrypted_access_token")
+  encryptedRefreshToken String?  @map("encrypted_refresh_token")
+  grantedScopes         String?  @map("granted_scopes")
+  category              String?  @default("Personal") @db.VarChar(50)
+  expiresAt             DateTime @map("expires_at") @db.Timestamptz(6)
+  createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, service, accountEmail])
+  @@map("service_tokens")
+}
+
+model UserAuthIdentity {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  provider     String   @db.VarChar(50)
+  providerUid  String   @map("provider_uid") @db.VarChar(255)
+  identityData Json?    @default("{}") @map("identity_data")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerUid])
+  @@index([provider, providerUid])
+  @@map("user_auth_identities")
+}
+
+model TaskList {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  name         String   @db.VarChar(255)
+  color        String   @default("bg-blue-500") @db.VarChar(50)
+  googleListId String?  @map("google_list_id") @db.VarChar(255)
+  connectionId String?  @map("connection_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tasks        Task[]
+
+  @@index([userId])
+  @@index([googleListId])
+  @@map("task_lists")
+}
+
+model Task {
+  id                    String     @id @default(uuid()) @db.Uuid
+  userId                String     @map("user_id") @db.Uuid
+  listId                String?    @map("list_id") @db.Uuid
+  title                 String     @db.VarChar(500)
+  description           String?
+  status                TaskStatus @default(PENDING)
+  dueDate               DateTime?  @map("due_date") @db.Timestamptz(6)
+  reminderMethod        String?    @map("reminder_method") @db.VarChar(20)
+  source                TaskSource @default(LOCAL)
+  googleTaskId          String?    @map("google_task_id") @db.VarChar(255)
+  connectionId          String?    @map("connection_id") @db.Uuid
+  lastSyncedAt          DateTime?  @map("last_synced_at") @db.Timestamptz(6)
+  createdAt             DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime   @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  priority              String     @default("MEDIUM") @db.VarChar(20)
+  recurrenceInterval    String?    @map("recurrence_interval") @db.VarChar(20)
+  reminderTime          DateTime?  @map("reminder_time") @db.Timestamptz(6)
+  googleListId          String?    @map("google_list_id") @db.VarChar(255)
+  googleCalendarEventId String?    @map("google_calendar_event_id") @db.VarChar(255)
+  isRecurring           Boolean    @default(false) @map("is_recurring")
+  recurrenceCount       Int?       @map("recurrence_count")
+  recurrenceEnd         DateTime?  @map("recurrence_end") @db.Timestamptz(6)
+  recurringParentId     String?    @map("recurring_parent_id") @db.Uuid
+  rrule                 String?    @db.VarChar(500)
+  taskList              TaskList?  @relation(fields: [listId], references: [id])
+  recurringParent       Task?      @relation("RecurringTasks", fields: [recurringParentId], references: [id])
+  recurringChildren     Task[]     @relation("RecurringTasks")
+  user                  User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([listId])
+  @@index([status])
+  @@index([googleTaskId])
+  @@index([googleCalendarEventId])
+  @@index([recurringParentId])
+  @@map("tasks")
+}
+
+model Folder {
+  id        String        @id @default(uuid()) @db.Uuid
+  userId    String        @map("user_id") @db.Uuid
+  name      String        @db.VarChar(255)
+  path      String        @db.VarChar(1000)
+  parentId  String?       @map("parent_id") @db.Uuid
+  s3Key     String        @map("s3_key") @db.VarChar(1000)
+  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  files     FileAsset[]
+  shares    FolderShare[]
+  parent    Folder?       @relation("FolderHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
+  children  Folder[]      @relation("FolderHierarchy")
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, path])
+  @@index([userId])
+  @@index([parentId])
+  @@index([path])
+  @@map("folders")
+}
+
+model FolderShare {
+  id           String           @id @default(uuid()) @db.Uuid
+  folderId     String           @map("folder_id") @db.Uuid
+  sharedWithId String           @map("shared_with_id") @db.Uuid
+  sharedById   String           @map("shared_by_id") @db.Uuid
+  permission   FolderPermission @default(VIEW)
+  canReshare   Boolean          @default(false) @map("can_reshare")
+  createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  folder       Folder           @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  sharedBy     User             @relation("SharedByUser", fields: [sharedById], references: [id], onDelete: Cascade)
+  sharedWith   User             @relation("SharedWithUser", fields: [sharedWithId], references: [id], onDelete: Cascade)
+
+  @@unique([folderId, sharedWithId])
+  @@index([folderId])
+  @@index([sharedWithId])
+  @@map("folder_shares")
+}
+
+model FileAsset {
+  id        String      @id @default(uuid()) @db.Uuid
+  userId    String      @map("user_id") @db.Uuid
+  fileName  String      @map("file_name") @db.VarChar(500)
+  s3Key     String      @map("s3_key") @db.VarChar(1000)
+  folder    String?     @db.VarChar(500)
+  mimeType  String?     @map("mime_type") @db.VarChar(100)
+  size      Int?
+  createdAt DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  folderId  String?     @map("folder_id") @db.Uuid
+  updatedAt DateTime    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  folderRef Folder?     @relation(fields: [folderId], references: [id])
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  shares    FileShare[]
+
+  @@index([userId])
+  @@index([folderId])
+  @@index([folder])
+  @@index([s3Key])
+  @@map("file_assets")
+}
+
+model FileShare {
+  id           String           @id @default(uuid()) @db.Uuid
+  fileId       String           @map("file_id") @db.Uuid
+  sharedWithId String           @map("shared_with_id") @db.Uuid
+  sharedById   String           @map("shared_by_id") @db.Uuid
+  permission   FolderPermission @default(VIEW)
+  canReshare   Boolean          @default(false) @map("can_reshare")
+  createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  file         FileAsset        @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  sharedBy     User             @relation("FileSharedByUser", fields: [sharedById], references: [id], onDelete: Cascade)
+  sharedWith   User             @relation("FileSharedWithUser", fields: [sharedWithId], references: [id], onDelete: Cascade)
+
+  @@unique([fileId, sharedWithId])
+  @@index([fileId])
+  @@index([sharedWithId])
+  @@map("file_shares")
+}
+
+enum TaskStatus {
+  PENDING
+  COMPLETED
+  OVERDUE
+}
+
+enum TaskSource {
+  LOCAL
+  GOOGLE
+}
+
+enum FolderPermission {
+  VIEW
+  DOWNLOAD
+  EDIT
+}
