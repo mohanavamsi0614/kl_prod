@@ -1,9 +1,4 @@
-const API_BASE_URL = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL;
-
-// Validate required environment variables in production
-if (!import.meta.env.DEV && !import.meta.env.VITE_API_URL) {
-  throw new Error('VITE_API_URL environment variable is required in production');
-}
+const API_BASE_URL = ''; // Always use relative paths
 
 interface FetchOptions extends RequestInit {
   params?: Record<string, string>;

@@ -8,6 +8,7 @@ import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma";
 import { setAuthCookies, clearAuthCookies } from "../utils/cookies";
 import { normalizePhoneNumber } from "../utils/phone";
+import axios from "axios";
 
 const router = express.Router();
 
@@ -18,6 +19,12 @@ if (!process.env.VITE_API_URL) {
 // Use VITE_API_URL directly, ensuring no trailing slash
 const rawClientUrl = process.env.VITE_API_URL;
 const CLIENT_URL = rawClientUrl.endsWith('/') ? rawClientUrl.slice(0, -1) : rawClientUrl;
+
+// Microsoft OAuth Constants
+const MS_AUTH_BASE = "https://login.microsoftonline.com/common/oauth2/v2.0";
+const MS_CLIENT_ID = process.env.CLIENT_ID;
+const MS_CLIENT_SECRET = process.env.CLIENT_SECRET;
+const MS_REDIRECT_URI = process.env.REDIRECT_URI || `${CLIENT_URL}/auth/microsoft/callback`;
 
 // NOTE: Rate limiting for auth routes is handled at the server level (server.ts)
 // with PostgreSQL-backed storage for production scalability.
@@ -209,6 +216,183 @@ router.get(
         }
 	}
 );
+
+// --- Microsoft OAuth ---
+
+// Initiate Microsoft OAuth
+router.get("/microsoft", (req, res) => {
+    const service = (req.query.service as string) || 'AUTH';
+    const stateObj = {
+        service,
+        isLinking: !!req.cookies?.accessToken // Simple check for linking
+    };
+    const state = Buffer.from(JSON.stringify(stateObj)).toString('base64');
+
+    const params = new URLSearchParams({
+        client_id: MS_CLIENT_ID || "",
+        response_type: "code",
+        redirect_uri: MS_REDIRECT_URI,
+        response_mode: "query",
+        scope: "openid profile email offline_access User.Read Mail.Read Calendars.Read",
+        prompt: "consent",
+        state: state
+    });
+
+    res.redirect(`${MS_AUTH_BASE}/authorize?${params.toString()}`);
+});
+
+// Microsoft OAuth Callback
+router.get("/microsoft/callback", async (req, res) => {
+    const code = req.query.code as string;
+    const stateParam = req.query.state as string;
+    
+    if (!code) return res.redirect(`${CLIENT_URL}/login?error=microsoft_auth_cancelled`);
+
+    try {
+        // Exchange code for tokens
+        const tokenRes = await axios.post(
+            `${MS_AUTH_BASE}/token`,
+            new URLSearchParams({
+                client_id: MS_CLIENT_ID || "",
+                client_secret: MS_CLIENT_SECRET || "",
+                code,
+                grant_type: "authorization_code",
+                redirect_uri: MS_REDIRECT_URI
+            }),
+            { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
+        );
+
+        const { access_token, refresh_token } = tokenRes.data;
+
+        // Get Microsoft Profile
+        const profileRes = await axios.get("https://graph.microsoft.com/v1.0/me", {
+            headers: { Authorization: `Bearer ${access_token}` }
+        });
+
+        const profile = {
+            id: profileRes.data.id,
+            displayName: profileRes.data.displayName,
+            email: profileRes.data.mail || profileRes.data.userPrincipalName,
+            firstName: profileRes.data.givenName || profileRes.data.displayName,
+            lastName: profileRes.data.surname || ""
+        };
+
+        // Parse state
+        let service = 'AUTH';
+        let isLinking = false;
+        if (stateParam) {
+            try {
+                const state = JSON.parse(Buffer.from(stateParam, 'base64').toString('utf-8'));
+                service = state.service;
+                isLinking = state.isLinking;
+            } catch (e) {
+                logger.warn({ error: e }, "Failed to parse MS OAuth state");
+            }
+        }
+
+        // Check if identity exists
+        const existingIdentity = await prisma.userAuthIdentity.findUnique({
+            where: {
+                provider_providerUid: {
+                    provider: 'MICROSOFT',
+                    providerUid: profile.id
+                }
+            },
+            include: { user: true }
+        });
+
+        if (existingIdentity) {
+            // Log in existing user
+            const tokens = generateTokenPair(existingIdentity.userId, profile.email);
+            setAuthCookies(res, tokens);
+            
+            let redirectUrl = `${CLIENT_URL}/dashboard?auth=success`;
+            if (service === 'CALENDAR') redirectUrl = `${CLIENT_URL}/dashboard/calendar?auth=success`;
+            else if (service === 'GMAIL') redirectUrl = `${CLIENT_URL}/dashboard/email?auth=success`;
+            
+            return res.redirect(redirectUrl);
+        } else {
+            // New Microsoft User - Need to link phone
+            const tempToken = jwt.sign(
+                { 
+                    microsoftId: profile.id, 
+                    email: profile.email,
+                    firstName: profile.firstName,
+                    lastName: profile.lastName,
+                    provider: 'MICROSOFT'
+                },
+                process.env.JWT_SECRET!,
+                { expiresIn: '15m' }
+            );
+
+            return res.redirect(`${CLIENT_URL}/?auth=link_required&token=${tempToken}&provider=MICROSOFT`);
+        }
+
+    } catch (err: any) {
+        logger.error({ error: err.response?.data || err.message }, "Microsoft OAuth Error");
+        res.redirect(`${CLIENT_URL}/login?error=auth_failed`);
+    }
+});
+
+// Complete Microsoft Linking / Signup
+router.post("/microsoft/link", async (req, res) => {
+    const { token, whatsappPhone } = req.body;
+
+    if (!token || !whatsappPhone) {
+        return res.status(400).json({ error: "Missing token or phone number" });
+    }
+
+    const phoneResult = normalizePhoneNumber(whatsappPhone);
+    if (!phoneResult.success) return res.status(400).json({ error: phoneResult.error });
+    const normalizedPhone = phoneResult.normalized;
+
+    try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET!) as any;
+        if (decoded.provider !== 'MICROSOFT') throw new Error("Invalid provider");
+
+        const { microsoftId, email, firstName, lastName } = decoded;
+
+        let user = await prisma.user.findUnique({ where: { whatsappPhone: normalizedPhone } });
+
+        if (user) {
+            await prisma.userAuthIdentity.create({
+                data: {
+                    userId: user.id,
+                    provider: 'MICROSOFT',
+                    providerUid: microsoftId,
+                    identityData: { email, firstName, lastName }
+                }
+            });
+            if (!user.email) {
+                user = await prisma.user.update({ where: { id: user.id }, data: { email } });
+            }
+        } else {
+            user = await prisma.user.create({
+                data: {
+                    firstName,
+                    lastName,
+                    email,
+                    whatsappPhone: normalizedPhone,
+                    identities: {
+                        create: {
+                            provider: 'MICROSOFT',
+                            providerUid: microsoftId,
+                            identityData: { email, firstName, lastName }
+                        }
+                    }
+                }
+            });
+        }
+
+        const tokens = generateTokenPair(user.id, user.email || "");
+        setAuthCookies(res, tokens);
+        res.json({ success: true, user });
+
+    } catch (error) {
+        logger.error({ error }, "Error linking Microsoft account");
+        res.status(500).json({ error: "Failed to link account" });
+    }
+});
 
 // Complete Google Linking / Signup
 router.post("/google/link", async (req, res) => {

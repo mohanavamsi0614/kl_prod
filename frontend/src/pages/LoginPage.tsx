@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Lock, ArrowRight, ArrowLeft, AlertCircle } from 'lucide-react';
 import { isValidPhoneNumber } from 'libphonenumber-js';
 import { api } from '../lib/api';
@@ -28,7 +29,7 @@ const ProductivityLogoLarge = () => (
         <feComposite in="SourceGraphic" in2="blur" operator="over" />
       </filter>
     </defs>
-    
+
     <circle cx="50" cy="50" r="48" fill="url(#outerGradLg)" />
     <circle cx="50" cy="50" r="24" fill="url(#innerGradLg)" filter="url(#glowLg)" />
     <circle cx="50" cy="50" r="48" stroke="white" strokeOpacity="0.1" strokeWidth="1" />
@@ -56,6 +57,15 @@ const GoogleLogo = () => (
   </svg>
 );
 
+const MicrosoftLogo = () => (
+  <svg className="w-5 h-5" viewBox="0 0 23 23">
+    <path fill="#f35325" d="M1 1h10v10H1z" />
+    <path fill="#81bc06" d="M12 1h10v10H12z" />
+    <path fill="#05a6f0" d="M1 12h10v10H1z" />
+    <path fill="#ffba08" d="M12 12h10v10H12z" />
+  </svg>
+);
+
 const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onNavigateToSignup, onBack }) => {
   const { detectedCountryCode } = useCountry();
   const [countryCode, setCountryCode] = useState(detectedCountryCode);
@@ -64,41 +74,58 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onNavigateToSignup, onBa
   useEffect(() => {
     setCountryCode(detectedCountryCode);
   }, [detectedCountryCode]);
-  
+
+  const [searchParams] = useSearchParams();
+
   const [isLoading, setIsLoading] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  
+
+  useEffect(() => {
+    const err = searchParams.get('error');
+    if (err) {
+      if (err === 'google_auth_cancelled') setError('Google authentication was cancelled.');
+      else if (err === 'microsoft_auth_cancelled') setError('Microsoft authentication was cancelled.');
+      else if (err === 'auth_failed') setError('Authentication failed. Please try again.');
+      else setError(err.replace(/_/g, ' '));
+    }
+  }, [searchParams]);
+
   const [password, setPassword] = useState('');
   const [phone, setPhone] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    
+
     const fullPhone = `${countryCode}${phone.replace(/[^\d]/g, '')}`;
     if (!isValidPhoneNumber(fullPhone)) {
-        setError('Invalid phone number');
-        return;
+      setError('Invalid phone number');
+      return;
     }
 
     setIsLoading(true);
-    
+
     try {
-        // Send phone in E.164 format
-        await api.post('/auth/login', { username: fullPhone, password });
-        onLogin();
+      // Send phone in E.164 format
+      await api.post('/auth/login', { username: fullPhone, password });
+      onLogin();
     } catch (error: unknown) {
-        const msg = error instanceof Error ? error.message : 'Login failed';
-        setError(msg);
+      const msg = error instanceof Error ? error.message : 'Login failed';
+      setError(msg);
     } finally {
-        setIsLoading(false);
+      setIsLoading(false);
     }
   };
 
   const handleGoogleLogin = () => {
     setIsGoogleLoading(true);
     window.location.href = `${import.meta.env.VITE_API_URL}/auth/google?service=AUTH`;
+  };
+
+  const handleMicrosoftLogin = () => {
+    setIsLoading(true);
+    window.location.href = `${import.meta.env.VITE_API_URL}/auth/microsoft?service=AUTH`;
   };
 
   return (
@@ -110,13 +137,13 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onNavigateToSignup, onBa
       </div>
 
       <div className="w-full max-w-md bg-white dark:bg-dark-surface border border-slate-200 dark:border-dark-border rounded-3xl shadow-2xl p-8 relative z-10 animate-in fade-in zoom-in duration-300">
-        
-        <button 
+
+        <button
           onClick={onBack}
           className="absolute top-6 left-6 p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors"
           title="Back to Home"
         >
-            <ArrowLeft className="w-5 h-5" />
+          <ArrowLeft className="w-5 h-5" />
         </button>
 
         <div className="flex flex-col items-center mb-8 mt-4">
@@ -137,34 +164,34 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onNavigateToSignup, onBa
         )}
 
         <form onSubmit={handleSubmit} className="space-y-5">
-          
+
           {/* WhatsApp Form */}
           <div className="space-y-5 animate-in fade-in slide-in-from-left-4 duration-300">
-                <div className="space-y-1.5">
-                <label className="text-sm font-medium text-slate-700 dark:text-slate-300 ml-1">WhatsApp Number</label>
-                <PhoneInput
-                  countryCode={countryCode}
-                  phone={phone}
-                  onCountryChange={setCountryCode}
-                  onPhoneChange={setPhone}
-                  placeholder="Phone number"
-                  required
-                />
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-slate-700 dark:text-slate-300 ml-1">WhatsApp Number</label>
+              <PhoneInput
+                countryCode={countryCode}
+                phone={phone}
+                onCountryChange={setCountryCode}
+                onPhoneChange={setPhone}
+                placeholder="Phone number"
+                required
+              />
             </div>
 
             <div className="space-y-1.5">
-                <label className="text-sm font-medium text-slate-700 dark:text-slate-300 ml-1">Password</label>
-                <div className="relative">
+              <label className="text-sm font-medium text-slate-700 dark:text-slate-300 ml-1">Password</label>
+              <div className="relative">
                 <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-                <input 
-                    type="password" 
-                    required
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl py-3 pl-10 pr-4 text-slate-900 dark:text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-productivity-500/50 focus:border-productivity-500 transition-all"
+                <input
+                  type="password"
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl py-3 pl-10 pr-4 text-slate-900 dark:text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-productivity-500/50 focus:border-productivity-500 transition-all"
                 />
-                </div>
+              </div>
             </div>
           </div>
 
@@ -178,8 +205,8 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onNavigateToSignup, onBa
             </button>
           </div>
 
-          <button 
-            type="submit" 
+          <button
+            type="submit"
             disabled={isLoading}
             className={`w-full font-semibold py-3.5 rounded-xl shadow-lg transition-all hover:scale-[1.02] disabled:opacity-70 disabled:hover:scale-100 flex items-center justify-center gap-2 bg-productivity-600 hover:bg-productivity-500 text-white shadow-productivity-500/25`}
           >
@@ -198,29 +225,38 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onNavigateToSignup, onBa
         </form>
 
         <div className="relative my-6">
-            <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-slate-200 dark:border-slate-700"></div>
-            </div>
-            <div className="relative flex justify-center text-sm">
-                <span className="px-2 bg-white dark:bg-dark-surface text-slate-500 dark:text-slate-400">Or continue with</span>
-            </div>
+          <div className="absolute inset-0 flex items-center">
+            <div className="w-full border-t border-slate-200 dark:border-slate-700"></div>
+          </div>
+          <div className="relative flex justify-center text-sm">
+            <span className="px-2 bg-white dark:bg-dark-surface text-slate-500 dark:text-slate-400">Or continue with</span>
+          </div>
         </div>
 
         <button
-            onClick={handleGoogleLogin}
-            disabled={isLoading || isGoogleLoading}
-            className="w-full py-3.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all flex items-center justify-center gap-3 text-slate-700 dark:text-white font-medium"
+          onClick={handleGoogleLogin}
+          disabled={isLoading || isGoogleLoading}
+          className="w-full py-3.5 rounded-xl border border-slate-200 dark:border-dark-border hover:bg-slate-50 dark:hover:bg-slate-800 transition-all flex items-center justify-center gap-3 text-slate-700 dark:text-white font-medium mb-3"
         >
-            {isGoogleLoading ? <ProductivitySpinner size="sm" /> : <GoogleLogo />}
-            {isGoogleLoading ? 'Connecting...' : 'Google'}
+          {isGoogleLoading ? <ProductivitySpinner size="sm" /> : <GoogleLogo />}
+          {isGoogleLoading ? 'Connecting...' : 'Google'}
+        </button>
+
+        <button
+          onClick={handleMicrosoftLogin}
+          disabled={isLoading || isGoogleLoading}
+          className="w-full py-3.5 rounded-xl border border-slate-200 dark:border-dark-border hover:bg-slate-50 dark:hover:bg-slate-800 transition-all flex items-center justify-center gap-3 text-slate-700 dark:text-white font-medium"
+        >
+          {isLoading && !isGoogleLoading ? <ProductivitySpinner size="sm" /> : <MicrosoftLogo />}
+          {isLoading && !isGoogleLoading ? 'Connecting...' : 'Microsoft'}
         </button>
 
         <div className="mt-8 pt-6 border-t border-slate-100 dark:border-slate-800 text-center">
           <p className="text-sm text-slate-500 dark:text-slate-400">
             Don't have an account?{' '}
-            <button 
-                onClick={onNavigateToSignup}
-                className="text-productivity-600 dark:text-productivity-400 font-semibold hover:text-productivity-700"
+            <button
+              onClick={onNavigateToSignup}
+              className="text-productivity-600 dark:text-productivity-400 font-semibold hover:text-productivity-700"
             >
               Create Account
             </button>
