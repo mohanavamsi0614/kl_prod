@@ -40,6 +40,17 @@ export class TokenManager {
      * Handles decryption, expiry check, and automatic refreshing.
      * Uses in-memory caching to reduce DB lookups.
      */
+    static async getConnection(userId: string, service: string, connectionId?: string) {
+        if (connectionId) {
+            return prisma.serviceToken.findFirst({
+                where: { id: connectionId, userId, service }
+            });
+        }
+        return prisma.serviceToken.findFirst({
+            where: { userId, service }
+        });
+    }
+
     static async getValidAccessToken(connectionId: string): Promise<string> {
         // Check cache first
         const cached = tokenCache.get(connectionId);
@@ -129,8 +140,72 @@ export class TokenManager {
         tokenRecord: any,
         refreshToken: string
     ): Promise<string> {
-        logger.info({ connectionId, oldExpiry: tokenRecord.expiresAt?.toISOString() }, "Refreshing expired access token");
+        logger.info({ connectionId, service: tokenRecord.service, oldExpiry: tokenRecord.expiresAt?.toISOString() }, "Refreshing expired access token");
 
+        if (tokenRecord.service === 'OUTLOOK' || tokenRecord.service === 'MICROSOFT_CALENDAR') {
+            return this.refreshMicrosoftToken(connectionId, tokenRecord, refreshToken);
+        }
+
+        // Default to Google refresh
+        return this.refreshGoogleToken(connectionId, tokenRecord, refreshToken);
+    }
+
+    private static async refreshMicrosoftToken(
+        connectionId: string,
+        tokenRecord: any,
+        refreshToken: string
+    ): Promise<string> {
+        const axios = require('axios');
+        try {
+            const response = await axios.post(
+                "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+                new URLSearchParams({
+                    client_id: process.env.CLIENT_ID || "",
+                    client_secret: process.env.CLIENT_SECRET || "",
+                    refresh_token: refreshToken,
+                    grant_type: "refresh_token",
+                }),
+                { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
+            );
+
+            const { access_token, refresh_token: newRefreshToken, expires_in, scope } = response.data;
+
+            const newExpiresAt = new Date(Date.now() + expires_in * 1000);
+
+            await prisma.serviceToken.update({
+                where: { id: connectionId },
+                data: {
+                    encryptedAccessToken: encryptToken(access_token),
+                    encryptedRefreshToken: newRefreshToken ? encryptToken(newRefreshToken) : tokenRecord.encryptedRefreshToken,
+                    expiresAt: newExpiresAt,
+                    grantedScopes: scope
+                },
+            });
+
+            tokenCache.set(connectionId, {
+                accessToken: access_token,
+                expiresAt: newExpiresAt.getTime()
+            });
+
+            return access_token;
+        } catch (error: any) {
+            logger.error({ error: error.response?.data || error.message, connectionId }, "Failed to refresh Microsoft token");
+            
+            const isRevoked = error.response?.data?.error === 'invalid_grant';
+            if (isRevoked) {
+                await prisma.serviceToken.delete({ where: { id: connectionId } });
+                tokenCache.delete(connectionId);
+                throw new TokenRevokedError("Microsoft access revoked. Please reconnect.");
+            }
+            throw new Error("Failed to refresh Microsoft token.");
+        }
+    }
+
+    private static async refreshGoogleToken(
+        connectionId: string,
+        tokenRecord: any,
+        refreshToken: string
+    ): Promise<string> {
         try {
             const oauth2Client = new google.auth.OAuth2(
                 process.env.GOOGLE_CLIENT_ID,
@@ -150,7 +225,6 @@ export class TokenManager {
                 throw new Error("Failed to retrieve access token from refresh");
             }
 
-            // 4. Update DB
             // expiry_date is in milliseconds from epoch
             const newExpiresAt = expiry_date ? new Date(expiry_date) : new Date(Date.now() + 3600 * 1000);
             
@@ -158,17 +232,11 @@ export class TokenManager {
                 where: { id: connectionId },
                 data: {
                     encryptedAccessToken: encryptToken(access_token),
-                    // Preserve existing refresh token if Google doesn't rotate it
                     encryptedRefreshToken: newRefreshToken ? encryptToken(newRefreshToken) : tokenRecord.encryptedRefreshToken,
                     expiresAt: newExpiresAt,
                 },
             });
 
-            // NOTE: Do NOT sync tokens across services (GMAIL/CALENDAR)
-            // Each service has its own OAuth scopes. Syncing tokens causes 403 errors
-            // because a GMAIL-scoped token cannot be used for CALENDAR operations.
-
-            // Cache the new token
             tokenCache.set(connectionId, {
                 accessToken: access_token,
                 expiresAt: newExpiresAt.getTime()
@@ -179,7 +247,6 @@ export class TokenManager {
         } catch (error: any) {
             logger.error({ error: error.message, connectionId, code: error.code, response: error.response?.data }, "Failed to refresh token");
             
-            // Check for token revocation or invalid grant
             const isRevoked = 
                 error.response?.data?.error === 'invalid_grant' ||
                 error.code === '400' ||
@@ -187,7 +254,6 @@ export class TokenManager {
                 error.message?.includes('Token has been expired or revoked');
             
             if (isRevoked) {
-                // Delete the invalid token from DB
                 try {
                     await prisma.serviceToken.delete({ where: { id: connectionId } });
                     tokenCache.delete(connectionId);
@@ -206,7 +272,7 @@ export class TokenManager {
      * Validates that a token has all required scopes for a service
      * Throws InsufficientScopesError if validation fails
      */
-    static async ensureTokenHasScopes(connectionId: string, service: 'GMAIL' | 'CALENDAR' | 'TASKS' | 'DRIVE'): Promise<void> {
+    static async ensureTokenHasScopes(connectionId: string, service: 'GMAIL' | 'CALENDAR' | 'TASKS' | 'DRIVE' | 'OUTLOOK' | 'MICROSOFT_CALENDAR'): Promise<void> {
         const tokenRecord = await prisma.serviceToken.findUnique({
             where: { id: connectionId }
         });
@@ -225,7 +291,7 @@ export class TokenManager {
             );
         }
 
-        const grantedScopes = tokenRecord.grantedScopes.split(',').map(s => s.trim());
+        const grantedScopes = tokenRecord.grantedScopes.split(/[\s,]+/).map(s => s.trim());
         
         const requiredScopes: Record<string, string[]> = {
             'GMAIL': [
@@ -243,6 +309,13 @@ export class TokenManager {
             'DRIVE': [
                 'https://www.googleapis.com/auth/drive.readonly',
                 'https://www.googleapis.com/auth/drive.file'
+            ],
+            'OUTLOOK': [
+                'Mail.Read',
+                'Mail.Send'
+            ],
+            'MICROSOFT_CALENDAR': [
+                'Calendars.ReadWrite'
             ]
         };
 

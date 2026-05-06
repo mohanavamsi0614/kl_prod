@@ -19,27 +19,39 @@ import tasksRouter from "./routes/tasks";
 import storageRouter from "./routes/storage";
 import sharingRouter from "./routes/sharing";
 import driveRouter from "./routes/drive";
+import outlookRouter from "./routes/outlook";
+import outlookCalendarRouter from "./routes/outlookCalendar";
+import dashboardRouter from "./routes/dashboard";
 import { requestIdMiddleware } from "./middleware/requestId";
 import prisma from "./lib/prisma";
 import { verifyAccessToken } from "./utils/jwt";
+import { createServer } from 'http';
+import { initSocket } from './utils/socket';
+import { initMailWorker } from './workers/mailWorker';
 
 // Load environment variables first
 const app = express();
+const httpServer = createServer(app);
+
+// Initialize Socket.io and background workers
+initSocket(httpServer);
+initMailWorker();
 
 // Validate required environment variables
 if (!process.env.PORT) {
-  throw new Error('PORT environment variable is required');
+	throw new Error('PORT environment variable is required');
 }
 
 if (!process.env.VITE_API_URL) {
 	throw new Error('VITE_API_URL environment variable is required');
 }
 
-const PORT = process.env.PORT;
-// Use VITE_API_URL for allowed origins. Split by comma if multiple are needed in future, 
-// but primarily it's the single VITE_API_URL.
+const PORT = process.env.PORT || "3000";
 const allowedOrigins = [
-	...process.env.VITE_API_URL.split(',').map(url => url.trim()),
+	...process.env.VITE_API_URL ? process.env.VITE_API_URL.split(',').map(url => url.trim()) : [],
+	`http://localhost:${PORT}`,
+	`http://127.0.0.1:${PORT}`,
+	"http://localhost:5173",
 ];
 
 // Security Middleware
@@ -60,7 +72,7 @@ app.use(
 				objectSrc: ["'self'", "blob:"], // Allow blob URLs in object/embed for PDF preview
 				mediaSrc: ["'self'", "blob:"], // Allow blob URLs for video/audio playback
 				connectSrc: [
-					"'self'", 
+					"'self'",
 					"https://accounts.google.com",
 					// S3 URLs - using specific region patterns since wildcards in middle are invalid
 					"https://*.s3.amazonaws.com",
@@ -116,7 +128,7 @@ if (process.env.DATABASE_URL) {
 // Key generator: combines IP + userId (if authenticated) for per-user limiting
 const keyGenerator = (req: express.Request): string => {
 	const token = req.cookies?.accessToken;
-	
+
 	if (token) {
 		try {
 			const decoded = verifyAccessToken(token);
@@ -127,7 +139,7 @@ const keyGenerator = (req: express.Request): string => {
 			// Invalid token, fall back to IP
 		}
 	}
-	
+
 	// Use ipKeyGenerator helper for proper IPv6 handling
 	const ip = req.ip || req.socket.remoteAddress || 'unknown';
 	return ipKeyGenerator(ip);
@@ -163,7 +175,7 @@ const strictAuthLimiter = rateLimit({
 		// Skip rate limiting for non-auth-sensitive endpoints
 		const path = req.path;
 		return path === '/google/callback' || // OAuth callback
-		       path === '/google'; // OAuth initiation
+			path === '/google'; // OAuth initiation
 	},
 });
 
@@ -177,14 +189,14 @@ app.use(passport.initialize());
 app.use((req, res, next) => {
 	const start = Date.now();
 	const reqLogger = req.log || logger;
-	
+
 	// Log incoming request
 	reqLogger.info({
 		method: req.method,
 		url: req.originalUrl,
 		userAgent: req.get("user-agent"),
 	}, "Incoming request");
-	
+
 	res.on("finish", () => {
 		const duration = Date.now() - start;
 		reqLogger.info({
@@ -206,6 +218,9 @@ app.use("/api/tasks", apiLimiter, tasksRouter);
 app.use("/api/storage", apiLimiter, storageRouter);
 app.use("/api/sharing", apiLimiter, sharingRouter);
 app.use("/api/drive", apiLimiter, driveRouter);
+app.use("/api/outlook", apiLimiter, outlookRouter);
+app.use("/api/outlook-calendar", apiLimiter, outlookCalendarRouter);
+app.use("/api/dashboard", apiLimiter, dashboardRouter);
 
 // 🔹 External M2M API (no rate limiting, no CSRF - trusted service-to-service)
 app.use("/external", externalRouter);
@@ -265,14 +280,14 @@ app.use(express.static(publicDir));
 
 // SPA fallback - but DO NOT override requests for real files
 app.get("*", (req, res, next) => {
-  if (req.path.includes(".")) {
-    return next();
-  }
-  res.sendFile(path.join(publicDir, "index.html"));
+	if (req.path.includes(".")) {
+		return next();
+	}
+	res.sendFile(path.join(publicDir, "index.html"));
 });
 
 // 🔹 Start server
-app.listen(Number(PORT), () => {
+httpServer.listen(Number(PORT), () => {
 	const host = process.env.VITE_API_URL || `http://localhost:${PORT}`;
 	logger.info(`Server running on ${host}`);
 });

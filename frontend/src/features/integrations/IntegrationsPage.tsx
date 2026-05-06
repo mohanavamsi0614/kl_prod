@@ -45,7 +45,11 @@ const IntegrationsPage: React.FC = () => {
 
   const handleLinkConfirm = () => {
     const serviceParam = linkModal.service.toUpperCase();
-    window.location.href = `/auth/google?service=${serviceParam}&category=${linkModal.category}`;
+    const provider = serviceParam.startsWith('MICROSOFT') || serviceParam === 'OUTLOOK' ? 'microsoft' : 'google';
+    const finalService = serviceParam === 'OUTLOOK' ? 'MAIL' : (serviceParam === 'MICROSOFT_CALENDAR' ? 'CALENDAR' : serviceParam);
+    
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+    window.location.href = `${apiUrl}/auth/${provider}?service=${finalService}&category=${linkModal.category}`;
   };
 
   const handleDisconnect = async (connection: Connection) => {
@@ -69,6 +73,10 @@ const IntegrationsPage: React.FC = () => {
         return <CheckSquare className="w-6 h-6" />;
       case 'DRIVE':
         return <HardDrive className="w-6 h-6" />;
+      case 'OUTLOOK':
+        return <Mail className="w-6 h-6" />;
+      case 'MICROSOFT_CALENDAR':
+        return <Calendar className="w-6 h-6" />;
       default:
         return <Puzzle className="w-6 h-6" />;
     }
@@ -84,6 +92,9 @@ const IntegrationsPage: React.FC = () => {
         return 'text-green-500 bg-green-50 dark:bg-green-900/20';
       case 'DRIVE':
         return 'text-yellow-500 bg-yellow-50 dark:bg-yellow-900/20';
+      case 'OUTLOOK':
+      case 'MICROSOFT_CALENDAR':
+        return 'text-blue-600 bg-blue-50 dark:bg-blue-900/20';
       default:
         return 'text-slate-500 bg-slate-50 dark:bg-slate-800';
     }
@@ -99,6 +110,10 @@ const IntegrationsPage: React.FC = () => {
         return 'Google Tasks';
       case 'DRIVE':
         return 'Google Drive';
+      case 'OUTLOOK':
+        return 'Outlook Mail';
+      case 'MICROSOFT_CALENDAR':
+        return 'Microsoft Calendar';
       default:
         return service;
     }
@@ -140,6 +155,24 @@ const IntegrationsPage: React.FC = () => {
       icon: <HardDrive className="w-8 h-8" />,
       color: 'text-yellow-600',
       bgColor: 'bg-yellow-50 dark:bg-yellow-900/20',
+    },
+    {
+      id: 'outlook',
+      service: 'OUTLOOK',
+      name: 'Outlook Mail',
+      description: 'Connect your Microsoft Outlook account to read and send emails.',
+      icon: <Mail className="w-8 h-8" />,
+      color: 'text-blue-600',
+      bgColor: 'bg-blue-50 dark:bg-blue-900/20',
+    },
+    {
+      id: 'ms-calendar',
+      service: 'MICROSOFT_CALENDAR',
+      name: 'Microsoft Calendar',
+      description: 'Sync your Microsoft Outlook calendar events.',
+      icon: <Calendar className="w-8 h-8" />,
+      color: 'text-blue-700',
+      bgColor: 'bg-blue-50 dark:bg-blue-900/20',
     },
   ];
 
@@ -305,10 +338,14 @@ const IntegrationsPage: React.FC = () => {
             </div>
             <button
               onClick={handleLinkConfirm}
-              className="w-full py-3 bg-productivity-500 hover:bg-productivity-600 text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
+              className={`w-full py-3 text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2 ${
+                linkModal.service.startsWith('MICROSOFT') || linkModal.service === 'OUTLOOK' 
+                  ? 'bg-blue-600 hover:bg-blue-700' 
+                  : 'bg-productivity-500 hover:bg-productivity-600'
+              }`}
             >
               <ExternalLink className="w-4 h-4" />
-              Continue with Google
+              Continue with {linkModal.service.startsWith('MICROSOFT') || linkModal.service === 'OUTLOOK' ? 'Microsoft' : 'Google'}
             </button>
           </div>
         </div>
