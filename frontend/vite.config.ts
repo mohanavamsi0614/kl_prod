@@ -4,11 +4,11 @@ import path from 'path'
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
-	const env = loadEnv(mode, path.resolve(__dirname, '.'), '')
+	const env = loadEnv(mode, path.resolve(__dirname, '..'), '')
 	return {
 		plugins: [react()],
 		base: '/',   // serve app at root
-		envDir: './',
+		envDir: '../',
 		server: {
 			proxy: {
 				'/auth': {
