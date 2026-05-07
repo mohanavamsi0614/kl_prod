@@ -23,25 +23,7 @@ function sanitizeHTML(html: string): string {
 // ...existing code...
 // Helper to get Gmail client
 async function getGmailClient(userId: string, serviceTokenId?: string) {
-    let serviceToken;
-
-    if (serviceTokenId) {
-        serviceToken = await prisma.serviceToken.findFirst({
-            where: {
-                id: serviceTokenId,
-                userId: userId,
-                service: 'GMAIL'
-            }
-        });
-    } else {
-        // Find the GMAIL service token for this user (default to first one)
-        serviceToken = await prisma.serviceToken.findFirst({
-            where: {
-                userId: userId,
-                service: 'GMAIL'
-            }
-        });
-    }
+    const serviceToken = await TokenManager.getConnection(userId, 'GMAIL', serviceTokenId);
 
     if (!serviceToken) {
         throw new Error("Gmail not connected");

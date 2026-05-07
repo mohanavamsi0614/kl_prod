@@ -171,13 +171,13 @@ const CalendarPage: React.FC = () => {
       // 1. Fetch Connections
       const connections = await api.get<ApiConnection[]>('/api/connections', { signal });
       
-      // Filter for CALENDAR
-      const calendarConnections = connections.filter(c => c.service === 'CALENDAR');
+      // Filter for CALENDAR services
+      const calendarConnections = connections.filter(c => c.service === 'CALENDAR' || c.service === 'MICROSOFT_CALENDAR');
       
       // Map to CalendarSource format
       const mappedCalendars: CalendarSource[] = calendarConnections.map(c => ({
           id: c.id,
-          provider: 'Google Calendar',
+          provider: c.service === 'CALENDAR' ? 'Google Calendar' : 'Microsoft Calendar',
           category: (c.category as CalendarCategory) || 'Personal',
           color: getCategoryColorValue((c.category as CalendarCategory) || 'Personal'),
           email: c.accountEmail
@@ -207,12 +207,14 @@ const CalendarPage: React.FC = () => {
       const startDate = viewMonthStart.toISOString();
       const endDate = viewMonthEnd.toISOString();
 
-      // Note: Don't reset events here to avoid flicker - progressive loading will update them
       // Fetch events for each connection in parallel but update state incrementally (Progressive Loading)
       const fetchPromises = calendarConnections.map(async (conn) => {
           try {
+              const calendar = mappedCalendars.find(c => c.id === conn.id);
+              const provider = calendar?.provider === 'Google Calendar' ? 'calendar' : 'outlook-calendar';
+              
               // Add timestamp to prevent browser caching
-              const data = await api.get<{ events: ApiEvent[] }>(`/api/calendar/events?connectionId=${conn.id}&startDate=${startDate}&endDate=${endDate}&_t=${Date.now()}`, { signal });
+              const data = await api.get<{ events: ApiEvent[] }>(`/api/${provider}/events?connectionId=${conn.id}&startDate=${startDate}&endDate=${endDate}&_t=${Date.now()}`, { signal });
               
               const newEvents = data.events
                   .filter(e => e.start && (e.start.dateTime || e.start.date)) // Filter out events without valid start
@@ -238,7 +240,7 @@ const CalendarPage: React.FC = () => {
                       time: e.start.dateTime ? new Date(e.start.dateTime).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'All Day',
                       participants: e.attendees?.map(a => a.email) || [], 
                       calendarId: conn.id,
-                      platform: 'Google Meet',
+                      platform: calendar?.provider === 'Google Calendar' ? 'Google Meet' : 'Microsoft Teams',
                       description: e.description,
                       originalStart: e.start.dateTime || e.start.date
                   };
@@ -311,7 +313,7 @@ const CalendarPage: React.FC = () => {
       const attemptFetch = async () => {
         try {
           const connections = await api.get<ApiConnection[]>('/api/connections');
-          const hasCalendar = connections.some(c => c.service === 'CALENDAR');
+          const hasCalendar = connections.some(c => c.service === 'CALENDAR' || c.service === 'MICROSOFT_CALENDAR');
           
           if (hasCalendar || retries >= maxRetries) {
             await fetchData();
@@ -349,7 +351,10 @@ const CalendarPage: React.FC = () => {
       if (!eventToDelete) return;
       
       try {
-          await api.delete(`/api/calendar/events/${eventToDelete.id}?connectionId=${eventToDelete.calendarId}`);
+          const calendar = calendars.find(c => c.id === eventToDelete.calendarId);
+          const provider = calendar?.provider === 'Google Calendar' ? 'calendar' : 'outlook-calendar';
+          
+          await api.delete(`/api/${provider}/events/${eventToDelete.id}?connectionId=${eventToDelete.calendarId}`);
 
           setEventsByCalendar(prev => ({
               ...prev,
@@ -368,9 +373,11 @@ const CalendarPage: React.FC = () => {
   };
 
   const handleLinkCalendar = () => {
-    // Redirect to Google OAuth with prompt=select_account to allow adding new accounts
-    // Pass category in query param so backend can persist it in state
-    window.location.href = `${import.meta.env.VITE_API_URL || ''}/auth/google?prompt=select_account&category=${linkCategory}&service=CALENDAR`;
+    if (linkProvider === 'Google Calendar') {
+        window.location.href = `${import.meta.env.VITE_API_URL || ''}/auth/google?prompt=select_account&category=${linkCategory}&service=CALENDAR`;
+    } else if (linkProvider === 'Microsoft Calendar') {
+        window.location.href = `${import.meta.env.VITE_API_URL || ''}/auth/microsoft?prompt=consent&category=${linkCategory}&service=CALENDAR`;
+    }
   };
 
   // Auto-set end date when start date changes
@@ -407,13 +414,16 @@ const CalendarPage: React.FC = () => {
     const attendees = newEventParticipants.split(',').map(email => ({ email: email.trim() })).filter(a => a.email);
 
     try {
-        await api.post('/api/calendar/events', {
+        const calendar = calendars.find(c => c.id === connectionId);
+        const provider = calendar?.provider === 'Google Calendar' ? 'calendar' : 'outlook-calendar';
+
+        await api.post(`/api/${provider}/events`, {
             connectionId,
             summary: newEventTitle,
             startTime,
             endTime,
             description: '', // Description is separate now
-            attendees
+            attendees: attendees.map(a => a.email)
         });
         
         // Reload to fetch new event
@@ -476,13 +486,16 @@ const CalendarPage: React.FC = () => {
       const attendees = editEventParticipants.split(',').map(email => ({ email: email.trim() })).filter(a => a.email);
 
       try {
-          await api.put(`/api/calendar/events/${selectedEvent.id}`, {
+          const calendar = calendars.find(c => c.id === selectedEvent.calendarId);
+          const provider = calendar?.provider === 'Google Calendar' ? 'calendar' : 'outlook-calendar';
+
+          await api.put(`/api/${provider}/events/${selectedEvent.id}`, {
               connectionId: selectedEvent.calendarId,
               summary: editEventTitle,
               startTime,
               endTime,
               description: '', // Description separate
-              attendees
+              attendees: attendees.map(a => a.email)
           });
 
           // Reload to fetch updated event
@@ -606,13 +619,17 @@ const CalendarPage: React.FC = () => {
                                          <button 
                                             key={ev.id} 
                                             onClick={() => handleEventClick(ev)}
-                                            className={`w-full text-left text-[11px] font-medium px-2 py-1 rounded-md truncate mb-1 shadow-sm transition-all hover:opacity-90 ${
+                                            className={`relative w-full text-left text-[11px] font-medium px-2 py-1 rounded-md truncate mb-1 shadow-sm transition-all hover:opacity-90 ${
                                             cal?.category === 'Work' ? 'bg-violet-200 dark:bg-violet-500/40 text-violet-900 dark:text-violet-100' :
                                             cal?.category === 'Personal' ? 'bg-productivity-200 dark:bg-productivity-500/40 text-productivity-900 dark:text-productivity-100' :
                                             'bg-emerald-200 dark:bg-emerald-500/40 text-emerald-900 dark:text-emerald-100'
                                          }`}>
                                             <span className="opacity-75 text-[10px] mr-1">{ev.time.replace(/\s[AP]M/, '').trim()}</span>
                                             {ev.title}
+                                            {/* Provider Dot */}
+                                            <div className={`absolute top-1 right-1 w-1.5 h-1.5 rounded-full ${
+                                                cal?.provider === 'Google Calendar' ? 'bg-red-500' : 'bg-blue-500'
+                                            }`} />
                                          </button>
                                      )
                                 })}
@@ -683,6 +700,11 @@ const CalendarPage: React.FC = () => {
                               <span className="flex items-center gap-1">
                                   <Video className="w-4 h-4" />
                                   {event.platform}
+                              </span>
+                              <span className={`flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-tight ${
+                                  calendar?.provider === 'Google Calendar' ? 'bg-red-100 text-red-600 dark:bg-red-900/30' : 'bg-blue-100 text-blue-600 dark:bg-blue-900/30'
+                              }`}>
+                                  {calendar?.provider === 'Google Calendar' ? 'Google' : 'Outlook'}
                               </span>
                           </div>
                       </div>
@@ -870,7 +892,9 @@ const CalendarPage: React.FC = () => {
                           onChange={(e) => setLinkProvider(e.target.value)}
                           className="w-full p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-productivity-500 outline-none"
                         >
-                            <option>Google Calendar</option>
+                            <option value="Google Calendar">Google Calendar</option>
+                            <option value="Microsoft Calendar">Microsoft Calendar</option>
+                            <option value="Apple Calendar" disabled>Apple Calendar (Coming Soon)</option>
                         </select>
                     </div>
 
@@ -941,9 +965,11 @@ const CalendarPage: React.FC = () => {
                         </button>
                         <button 
                           onClick={handleLinkCalendar}
-                          className="flex-1 py-2.5 bg-productivity-600 hover:bg-productivity-500 text-white font-medium rounded-xl shadow-lg shadow-productivity-500/25 transition-colors"
+                          className={`flex-1 py-2.5 text-white font-bold rounded-xl transition-all shadow-lg hover:shadow-xl hover:-translate-y-0.5 active:translate-y-0 flex items-center justify-center gap-2 ${
+                              linkProvider.includes('MICROSOFT') ? 'bg-blue-600 hover:bg-blue-700' : 'bg-productivity-600 hover:bg-productivity-700'
+                          }`}
                         >
-                            Connect Google Account
+                            Connect {linkProvider.split(' ')[0]} Account
                         </button>
                     </div>
                 </div>

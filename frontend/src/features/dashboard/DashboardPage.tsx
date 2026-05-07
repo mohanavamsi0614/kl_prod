@@ -26,18 +26,17 @@ const DashboardPage: React.FC = () => {
 
   const fetchDashboardData = useCallback(async () => {
     try {
-      // Fetch tasks, calendar events, and emails in parallel
-      const [tasksRes, eventsRes, emailsRes] = await Promise.allSettled([
+      // Fetch tasks and unified dashboard summary in parallel
+      const [tasksRes, summaryRes] = await Promise.allSettled([
         api.get<{ tasks: Task[] }>('/api/tasks/me'),
-        api.get<{ events: CalendarEvent[] }>('/api/calendar/events'),
-        api.get<{ emails: Array<{ id: string }> }>('/api/gmail/messages?labelIds=UNREAD&maxResults=100')
+        api.get<{ events: CalendarEvent[], unreadEmailCount: number }>('/api/dashboard/summary')
       ]);
 
       setData(prev => ({
         ...prev,
         tasks: tasksRes.status === 'fulfilled' ? tasksRes.value.tasks || [] : [],
-        events: eventsRes.status === 'fulfilled' ? eventsRes.value.events || [] : [],
-        unreadEmailCount: emailsRes.status === 'fulfilled' ? (emailsRes.value.emails?.length || 0) : 0,
+        events: summaryRes.status === 'fulfilled' ? summaryRes.value.events || [] : [],
+        unreadEmailCount: summaryRes.status === 'fulfilled' ? summaryRes.value.unreadEmailCount : 0,
         isLoading: false
       }));
     } catch (error) {

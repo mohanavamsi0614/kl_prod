@@ -194,10 +194,10 @@ const EmailPage: React.FC = () => {
           if (reset) {
               const connections = await api.get<ApiConnection[]>('/api/connections');
               currentAccounts = connections
-                  .filter(c => c.service === 'GMAIL')
+                  .filter(c => c.service === 'GMAIL' || c.service === 'OUTLOOK')
                   .map(c => ({
                       id: c.id,
-                      provider: 'Gmail',
+                      provider: c.service === 'GMAIL' ? 'Gmail' : 'Outlook',
                       address: c.accountEmail,
                       connected: true,
                       category: c.category || 'Personal',
@@ -250,7 +250,8 @@ const EmailPage: React.FC = () => {
                   }
 
                   try {
-                      const res = await api.get<{ messages: any[], nextPageToken?: string }>(`/api/gmail/fetch?${queryParams.toString()}`);
+                      const endpoint = account.provider === 'Gmail' ? '/api/gmail' : '/api/outlook';
+                      const res = await api.get<{ messages: any[], nextPageToken?: string }>(`${endpoint}/fetch?${queryParams.toString()}`);
                       return { 
                           messages: res.messages || [], 
                           nextPageToken: res.nextPageToken || null,
@@ -284,6 +285,7 @@ const EmailPage: React.FC = () => {
                       attachments: msg.attachments || [],
                       inlineAttachments: msg.inlineAttachments || [],
                       accountId: res.accountId,
+                      provider: account?.provider,
                       category: account?.category,
                       accountColor: account?.color
                   }));
@@ -389,9 +391,9 @@ const EmailPage: React.FC = () => {
       const attemptFetch = async () => {
         try {
           const connections = await api.get<ApiConnection[]>('/api/connections');
-          const hasGmail = connections.some(c => c.service === 'GMAIL');
+          const hasEmail = connections.some(c => c.service === 'GMAIL' || c.service === 'OUTLOOK');
           
-          if (hasGmail || retries >= maxRetries) {
+          if (hasEmail || retries >= maxRetries) {
             await fetchData(true);
             // Don't clear isLinking here - let fetchData handle it with proper timing
             if (hasGmail) {
@@ -468,7 +470,10 @@ const EmailPage: React.FC = () => {
       
       setIsSendingCompose(true);
       try {
-          await api.post('/api/gmail/send', {
+          const account = accounts.find(a => a.id === (composeSender || selectedAccountId));
+          const endpoint = account?.provider === 'Outlook' ? '/api/outlook' : '/api/gmail';
+          
+          await api.post(`${endpoint}/send`, {
               to: composeTo,
               subject: composeSubject,
               body: composeBody,
@@ -525,9 +530,12 @@ const EmailPage: React.FC = () => {
       setSelectedEmail(prev => prev ? { ...prev, read: true } : null);
     }
     
-    // Call backend to mark as read in Gmail
+    // Call backend to mark as read
     try {
-      const response = await api.post<{ success: boolean; messageId: string; read: boolean }>('/api/gmail/mark-as-read', {
+      const account = accounts.find(a => a.id === accountId);
+      const endpoint = account?.provider === 'Outlook' ? '/api/outlook' : '/api/gmail';
+      
+      const response = await api.post<{ success: boolean; messageId: string; read: boolean }>(`${endpoint}/mark-as-read`, {
         messageId: id,
         accountId: accountId || null
       });
@@ -551,11 +559,38 @@ const EmailPage: React.FC = () => {
     }
   };
 
-  const handleEmailClick = (email: ExtendedEmail) => {
+  const [isLoadingDetail, setIsLoadingDetail] = useState(false);
+
+  const handleEmailClick = async (email: ExtendedEmail) => {
     // Don't mark as read immediately - only mark when closing the email view
     setSelectedEmail(email);
     setIsReplying(false);
     setReplyText('');
+
+    // If it's Outlook and we don't have the body yet, fetch it
+    if ((email as any).provider === 'Outlook' && !email.body) {
+        setIsLoadingDetail(true);
+        try {
+            const detail = await api.get<any>(`/api/outlook/message/${email.id}?accountId=${email.accountId}`);
+            setEmails(prev => prev.map(e => e.id === email.id ? { 
+                ...e, 
+                body: detail.body, 
+                attachments: detail.attachments, 
+                inlineAttachments: detail.inlineAttachments 
+            } : e));
+            setSelectedEmail(prev => prev && prev.id === email.id ? { 
+                ...prev, 
+                body: detail.body, 
+                attachments: detail.attachments, 
+                inlineAttachments: detail.inlineAttachments 
+            } : prev);
+        } catch (err) {
+            console.error("Failed to fetch email detail", err);
+            showNotification("Failed to load full email content", "error");
+        } finally {
+            setIsLoadingDetail(false);
+        }
+    }
   };
 
   const handleBackToList = () => {
@@ -582,10 +617,14 @@ const EmailPage: React.FC = () => {
     
     setIsSending(true);
     try {
-        await api.post('/api/gmail/send', {
+        const account = accounts.find(a => a.id === selectedEmail.accountId);
+        const endpoint = account?.provider === 'Outlook' ? '/api/outlook' : '/api/gmail';
+
+        await api.post(`${endpoint}/send`, {
             to: extractEmailAddress(selectedEmail.from), // Parse email from "Name <email>" format
             subject: `Re: ${selectedEmail.subject}`,
-            body: replyText
+            body: replyText,
+            accountId: selectedEmail.accountId
         });
         
         showNotification('Reply sent!', 'success');
@@ -600,10 +639,13 @@ const EmailPage: React.FC = () => {
   };
 
   const handleDownloadAttachment = (accountId: string, messageId: string, attachment: Attachment) => {
+      const account = accounts.find(a => a.id === accountId);
+      const provider = account?.provider === 'Outlook' ? 'outlook' : 'gmail';
+      
       const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000';
       const encodedFilename = encodeURIComponent(attachment.filename);
       const encodedMimeType = encodeURIComponent(attachment.mimeType);
-      const url = `${apiUrl}/api/gmail/attachment/${accountId}/${messageId}/${attachment.id}?filename=${encodedFilename}&mimeType=${encodedMimeType}`;
+      const url = `${apiUrl}/api/${provider}/attachment/${accountId}/${messageId}/${attachment.id}?filename=${encodedFilename}&mimeType=${encodedMimeType}`;
       window.open(url, '_blank');
   };
 
@@ -612,6 +654,12 @@ const EmailPage: React.FC = () => {
         // Redirect to backend auth with category
         const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000';
         window.location.href = `${apiUrl}/auth/google?service=GMAIL&category=${linkCategory}`;
+        return;
+    }
+
+    if (linkProvider === 'Outlook') {
+        const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+        window.location.href = `${apiUrl}/auth/microsoft?service=MAIL&category=${linkCategory}`;
         return;
     }
 
@@ -1125,8 +1173,12 @@ const EmailPage: React.FC = () => {
                                         >
                                             <div className="flex items-center gap-4">
                                                 {/* Star */}
-                                                <div className="flex items-center shrink-0 pl-1">
+                                                <div className="flex items-center shrink-0 pl-1 relative">
                                                     <Star className="w-5 h-5 text-slate-300 dark:text-slate-600 hover:text-yellow-400 transition-colors" />
+                                                    {/* Provider Indicator Dot */}
+                                                    <div className={`absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full border-2 border-white dark:border-dark-surface ${
+                                                        (email as any).provider === 'Gmail' ? 'bg-red-500' : 'bg-blue-500'
+                                                    }`} title={(email as any).provider} />
                                                 </div>
 
                                                 {/* Sender */}
@@ -1138,12 +1190,12 @@ const EmailPage: React.FC = () => {
                                                     </span>
                                                     {/* Category Badge (Only in Unified View) */}
                                                     {!selectedAccountId && email.category && (
-                                                        <span className={`text-[10px] font-medium truncate ${
+                                                        <span className={`text-[10px] font-medium truncate flex items-center gap-1 ${
                                                             email.category === 'Work' ? 'text-violet-500' :
                                                             email.category === 'Personal' ? 'text-productivity-500' :
                                                             email.category === 'Family' ? 'text-emerald-500' : 'text-slate-500'
                                                         }`}>
-                                                            {email.category} • {accounts.find(a => a.id === email.accountId)?.provider}
+                                                            {email.category} • <span className={(email as any).provider === 'Gmail' ? 'text-red-500' : 'text-blue-500'}>{(email as any).provider}</span>
                                                         </span>
                                                     )}
                                                 </div>
@@ -1404,10 +1456,10 @@ const EmailPage: React.FC = () => {
                         onChange={(e) => setLinkProvider(e.target.value)}
                         className="w-full p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-productivity-500 outline-none"
                       >
-                          <option>Gmail</option>
-                          <option>Outlook</option>
-                          <option>iCloud</option>
-                          <option>Yahoo Mail</option>
+                          <option value="Gmail">Gmail</option>
+                          <option value="Outlook">Outlook</option>
+                          <option value="iCloud" disabled>iCloud (Coming Soon)</option>
+                          <option value="Yahoo Mail" disabled>Yahoo Mail (Coming Soon)</option>
                       </select>
                   </div>
 
@@ -1438,8 +1490,10 @@ const EmailPage: React.FC = () => {
                           Cancel
                       </button>
                       <button 
-                        onClick={handleLinkAccount}
-                        className="flex-1 py-2.5 bg-productivity-600 hover:bg-productivity-500 text-white font-medium rounded-xl shadow-lg shadow-productivity-500/25 transition-colors"
+                          onClick={handleLinkAccount}
+                          className={`flex-1 py-2.5 text-white font-bold rounded-xl transition-all shadow-lg hover:shadow-xl hover:-translate-y-0.5 active:translate-y-0 flex items-center justify-center gap-2 ${
+                              linkProvider === 'Outlook' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-productivity-600 hover:bg-productivity-700'
+                          }`}
                       >
                           Connect Account
                       </button>

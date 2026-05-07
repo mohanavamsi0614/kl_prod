@@ -19,6 +19,9 @@ import tasksRouter from "./routes/tasks";
 import storageRouter from "./routes/storage";
 import sharingRouter from "./routes/sharing";
 import driveRouter from "./routes/drive";
+import outlookRouter from "./routes/outlook";
+import outlookCalendarRouter from "./routes/outlookCalendar";
+import dashboardRouter from "./routes/dashboard";
 import { requestIdMiddleware } from "./middleware/requestId";
 import prisma from "./lib/prisma";
 import { verifyAccessToken } from "./utils/jwt";
@@ -207,6 +210,9 @@ app.use("/api/tasks", apiLimiter, tasksRouter);
 app.use("/api/storage", apiLimiter, storageRouter);
 app.use("/api/sharing", apiLimiter, sharingRouter);
 app.use("/api/drive", apiLimiter, driveRouter);
+app.use("/api/outlook", apiLimiter, outlookRouter);
+app.use("/api/outlook-calendar", apiLimiter, outlookCalendarRouter);
+app.use("/api/dashboard", apiLimiter, dashboardRouter);
 
 // 🔹 External M2M API (no rate limiting, no CSRF - trusted service-to-service)
 app.use("/external", externalRouter);

@@ -4,9 +4,11 @@ import { requireAuth, AuthRequest, optionalAuth } from "../middleware/auth";
 import { generateTokenPair, verifyRefreshToken, verifyAccessToken } from "../utils/jwt";
 import logger from "../utils/logger";
 import { hashPassword } from "../utils/password";
+import { encryptToken } from "../utils/encryption";
 import jwt from "jsonwebtoken";
 import prisma from "../lib/prisma";
 import { setAuthCookies, clearAuthCookies } from "../utils/cookies";
+import { clearCache, createCacheKey } from '../utils/cache';
 import { normalizePhoneNumber } from "../utils/phone";
 import axios from "axios";
 
@@ -45,7 +47,7 @@ router.get("/google", (req, res, next) => {
 
     let state = undefined;
     let userId = undefined;
-    
+
     // Try to get user ID from access token
     if (token) {
         try {
@@ -115,36 +117,36 @@ router.get("/google", (req, res, next) => {
     // AUTH service only uses profile + email, no additional scopes
 
     passport.authenticate("google", {
-		scope: scopes,
-		session: false,
+        scope: scopes,
+        session: false,
         accessType: 'offline', // Critical for receiving a refresh token
         prompt: 'consent',      // Force consent to ensure refresh token is returned
         state: state
-	})(req, res, next);
+    })(req, res, next);
 });
 
 // Google OAuth callback
 router.get(
-	"/google/callback",
-	passport.authenticate("google", { session: false, failureRedirect: `${CLIENT_URL}/login?error=google_auth_cancelled` }),
-	async (req, res) => {
-		const userOrProfile = req.user as any;
+    "/google/callback",
+    passport.authenticate("google", { session: false, failureRedirect: `${CLIENT_URL}/login?error=google_auth_cancelled` }),
+    async (req, res) => {
+        const userOrProfile = req.user as any;
 
-		if (!userOrProfile) {
-			return res.redirect(`${CLIENT_URL}/?error=auth_failed`);
-		}
+        if (!userOrProfile) {
+            return res.redirect(`${CLIENT_URL}/?error=auth_failed`);
+        }
 
-		// Check if it's a full user (has id) or just a profile (needs linking)
-		if (userOrProfile.id && !userOrProfile.provider) {
+        // Check if it's a full user (has id) or just a profile (needs linking)
+        if (userOrProfile.id && !userOrProfile.provider) {
             // It's a user (either logged in via existing identity OR linked to current user)
-			const user = userOrProfile;
-            
+            const user = userOrProfile;
+
             // If we were already logged in, we don't strictly need to set cookies again, but it refreshes them.
             // However, if we were linking, we want to redirect back to dashboard/calendar, not just "auth=success".
-            
+
             // Check if we came from a linking flow (we can infer this if the user ID matches the cookie, but simpler to just redirect)
             // Ideally we'd use 'state' param to know where to redirect, but for now let's default to dashboard if it looks like a link operation.
-            
+
             const tokens = generateTokenPair(user.id, user.email || "");
             setAuthCookies(res, tokens);
 
@@ -152,7 +154,7 @@ router.get(
             let redirectUrl = `${CLIENT_URL}/dashboard?auth=success`;
             let service: string | undefined;
             let isLinking = false;
-            
+
             // First try: Get service from state param (passed through by Google OAuth)
             const stateParam = req.query.state as string | undefined;
             if (stateParam) {
@@ -166,14 +168,14 @@ router.get(
                     logger.warn({ error: e }, "Failed to parse OAuth state");
                 }
             }
-            
+
             // Second try: Get service attached by passport callback
             if (!service && (user as any)._oauthService) {
                 service = (user as any)._oauthService;
                 isLinking = true; // If service was attached by passport, it's always a linking operation
                 logger.info({ service, isLinking }, "OAuth callback - using attached service");
             }
-            
+
             // Set redirect URL based on whether this is a linking operation or initial login
             // For linking: redirect to the specific service page
             // For initial login/signup: redirect to dashboard
@@ -193,16 +195,16 @@ router.get(
                 // Initial login/signup - always go to dashboard regardless of service
                 redirectUrl = `${CLIENT_URL}/dashboard?auth=success`;
             }
-            
+
             logger.info({ redirectUrl, service }, "OAuth callback - redirecting");
             return res.redirect(redirectUrl);
-		} else {
+        } else {
             // It's a profile, need to link
             const profile = userOrProfile;
             // Create a temporary token with profile info
             const tempToken = jwt.sign(
-                { 
-                    googleId: profile.id, 
+                {
+                    googleId: profile.id,
                     email: profile.emails?.[0]?.value,
                     firstName: profile.name?.givenName || profile.displayName,
                     lastName: profile.name?.familyName || ""
@@ -214,38 +216,72 @@ router.get(
             // Redirect to frontend with temp token to complete signup
             return res.redirect(`${CLIENT_URL}/?auth=link_required&token=${tempToken}`);
         }
-	}
+    }
 );
 
 // --- Microsoft OAuth ---
 
 // Initiate Microsoft OAuth
 router.get("/microsoft", (req, res) => {
-    const service = (req.query.service as string) || 'AUTH';
-    const stateObj = {
+    const service = (req.query.service as string) || "AUTH";
+    const category = (req.query.category as string) || "Personal";
+
+    const userId = req.cookies?.userId;
+
+    const stateObj: any = {
+        category,
         service,
-        isLinking: !!req.cookies?.accessToken // Simple check for linking
+        isLinking: !!userId
     };
-    const state = Buffer.from(JSON.stringify(stateObj)).toString('base64');
+
+    if (userId) {
+        stateObj.userId = userId;
+    }
+
+    const state = Buffer
+        .from(JSON.stringify(stateObj))
+        .toString("base64");
+
+    const scopes = [
+        "openid",
+        "profile",
+        "email",
+        "User.Read",
+        "offline_access"
+    ];
+
+    if (service === "MAIL") {
+        scopes.push(
+            "Mail.Read",
+            "Mail.Send"
+        );
+    }
+    else if (service === "CALENDAR") {
+        scopes.push(
+            "Calendars.ReadWrite"
+        );
+    }
 
     const params = new URLSearchParams({
         client_id: MS_CLIENT_ID || "",
         response_type: "code",
         redirect_uri: MS_REDIRECT_URI,
         response_mode: "query",
-        scope: "openid profile email offline_access User.Read Mail.Read Calendars.Read",
+        scope: scopes.join(" "),
         prompt: "consent",
-        state: state
+        state
     });
 
-    res.redirect(`${MS_AUTH_BASE}/authorize?${params.toString()}`);
+    res.redirect(
+        `${MS_AUTH_BASE}/authorize?${params.toString()}`
+    );
 });
 
 // Microsoft OAuth Callback
 router.get("/microsoft/callback", async (req, res) => {
     const code = req.query.code as string;
     const stateParam = req.query.state as string;
-    
+
     if (!code) return res.redirect(`${CLIENT_URL}/login?error=microsoft_auth_cancelled`);
 
     try {
@@ -302,20 +338,55 @@ router.get("/microsoft/callback", async (req, res) => {
         });
 
         if (existingIdentity) {
-            // Log in existing user
-            const tokens = generateTokenPair(existingIdentity.userId, profile.email);
+            const user = existingIdentity.user;
+
+            // 1. Log in existing user
+            const tokens = generateTokenPair(user.id, profile.email);
             setAuthCookies(res, tokens);
-            
+
+            if (service === 'MAIL' || service === 'CALENDAR' || isLinking) {
+                const msService = service === 'CALENDAR' ? 'MICROSOFT_CALENDAR' : 'OUTLOOK';
+
+                await prisma.serviceToken.upsert({
+                    where: {
+                        userId_service_accountEmail: {
+                            userId: user.id,
+                            service: msService,
+                            accountEmail: profile.email
+                        }
+                    },
+                    update: {
+                        encryptedAccessToken: encryptToken(access_token),
+                        encryptedRefreshToken: refresh_token ? encryptToken(refresh_token) : undefined,
+                        expiresAt: new Date(Date.now() + tokenRes.data.expires_in * 1000),
+                        grantedScopes: tokenRes.data.scope,
+                        category: (stateParam ? JSON.parse(Buffer.from(stateParam, 'base64').toString('utf-8')).category : 'Personal') || 'Personal'
+                    },
+                    create: {
+                        userId: user.id,
+                        service: msService,
+                        accountEmail: profile.email,
+                        encryptedAccessToken: encryptToken(access_token),
+                        encryptedRefreshToken: refresh_token ? encryptToken(refresh_token) : undefined,
+                        expiresAt: new Date(Date.now() + tokenRes.data.expires_in * 1000),
+                        grantedScopes: tokenRes.data.scope,
+                        category: (stateParam ? JSON.parse(Buffer.from(stateParam, 'base64').toString('utf-8')).category : 'Personal') || 'Personal'
+                    }
+                });
+
+                clearCache(createCacheKey('connections', user.id));
+            }
+
             let redirectUrl = `${CLIENT_URL}/dashboard?auth=success`;
             if (service === 'CALENDAR') redirectUrl = `${CLIENT_URL}/dashboard/calendar?auth=success`;
-            else if (service === 'GMAIL') redirectUrl = `${CLIENT_URL}/dashboard/email?auth=success`;
-            
+            else if (service === 'MAIL') redirectUrl = `${CLIENT_URL}/dashboard/email?auth=success`;
+
             return res.redirect(redirectUrl);
         } else {
             // New Microsoft User - Need to link phone
             const tempToken = jwt.sign(
-                { 
-                    microsoftId: profile.id, 
+                {
+                    microsoftId: profile.id,
                     email: profile.email,
                     firstName: profile.firstName,
                     lastName: profile.lastName,
@@ -329,8 +400,9 @@ router.get("/microsoft/callback", async (req, res) => {
         }
 
     } catch (err: any) {
+        console.log(err)
         logger.error({ error: err.response?.data || err.message }, "Microsoft OAuth Error");
-        res.redirect(`${CLIENT_URL}/login?error=auth_failed`);
+        res.redirect(`${CLIENT_URL}/login?error=${err.response?.data?.error}`);
     }
 });
 
@@ -429,7 +501,7 @@ router.post("/google/link", async (req, res) => {
             if (user.email && user.email !== email) {
                 return res.status(409).json({ error: "Phone number already linked to a different email" });
             }
-            
+
             // Check if identity already exists
             const existingIdentity = await prisma.userAuthIdentity.findUnique({
                 where: {
@@ -491,7 +563,7 @@ router.post("/google/link", async (req, res) => {
             whatsappPhone: user.whatsappPhone
         };
 
-        
+
         res.json({ success: true, user: safeUser });
 
     } catch (error) {
@@ -550,8 +622,8 @@ router.post("/register", async (req, res) => {
         const tokens = generateTokenPair(user.id, user.email || "");
         setAuthCookies(res, tokens);
 
-        res.json({ 
-            success: true, 
+        res.json({
+            success: true,
             user: {
                 id: user.id,
                 email: user.email,
@@ -603,7 +675,7 @@ router.post("/merge", async (req, res) => {
                 where: { id: user.id },
                 data: { passwordHash }
             });
-            
+
             // Ensure FORM identity exists
             const formIdentity = await prisma.userAuthIdentity.findUnique({
                 where: {
@@ -629,8 +701,8 @@ router.post("/merge", async (req, res) => {
         const tokens = generateTokenPair(user.id, user.email || "");
         setAuthCookies(res, tokens);
 
-        res.json({ 
-            success: true, 
+        res.json({
+            success: true,
             user: {
                 id: user.id,
                 email: user.email,
@@ -655,8 +727,8 @@ router.post("/login", (req, res, next) => {
         const tokens = generateTokenPair(user.id, user.email || "");
         setAuthCookies(res, tokens);
 
-        res.json({ 
-            success: true, 
+        res.json({
+            success: true,
             user: {
                 id: user.id,
                 email: user.email,
@@ -670,203 +742,202 @@ router.post("/login", (req, res, next) => {
 
 // Get current user (requires JWT authentication)
 router.get("/me", requireAuth, async (req, res) => {
-	try {
-		const user = await prisma.user.findUnique({
-			where: { id: req.user!.id },
-			select: {
-				id: true,
-				email: true,
-				firstName: true,
+    try {
+        const user = await prisma.user.findUnique({
+            where: { id: req.user!.id },
+            select: {
+                id: true,
+                email: true,
+                firstName: true,
                 lastName: true,
                 whatsappPhone: true
-			},
-		});
+            },
+        });
 
-		if (!user) {
-			return res.status(404).json({ error: "User not found" });
-		}
+        if (!user) {
+            return res.status(404).json({ error: "User not found" });
+        }
 
-		res.json({ user });
-	} catch (error) {
-		logger.error({ error }, "Error fetching user");
-		res.status(500).json({ error: "Failed to fetch user" });
-	}
+        res.json({ user });
+    } catch (error) {
+        logger.error({ error }, "Error fetching user");
+        res.status(500).json({ error: "Failed to fetch user" });
+    }
 });
 
 // Refresh access token using refresh token (stateless)
 router.post("/refresh", async (req, res) => {
-	try {
-		const refreshToken = req.cookies?.refreshToken || req.body.refreshToken;
+    try {
+        const refreshToken = req.cookies?.refreshToken || req.body.refreshToken;
 
-		if (!refreshToken) {
-			return res.status(401).json({
-				error: "No refresh token provided",
-			});
-		}
+        if (!refreshToken) {
+            return res.status(401).json({
+                error: "No refresh token provided",
+            });
+        }
 
-		const decoded = verifyRefreshToken(refreshToken);
+        const decoded = verifyRefreshToken(refreshToken);
 
-		if (!decoded) {
-			return res.status(401).json({
-				error: "Invalid or expired refresh token",
-			});
-		}
+        if (!decoded) {
+            return res.status(401).json({
+                error: "Invalid or expired refresh token",
+            });
+        }
 
-		const user = await prisma.user.findUnique({
-			where: { id: decoded.userId },
-		});
+        const user = await prisma.user.findUnique({
+            where: { id: decoded.userId },
+        });
 
-		if (!user) {
-			return res.status(401).json({
-				error: "User not found",
-			});
-		}
+        if (!user) {
+            return res.status(401).json({
+                error: "User not found",
+            });
+        }
 
-		const tokens = generateTokenPair(user.id, user.email || "");
-		setAuthCookies(res, tokens);
+        const tokens = generateTokenPair(user.id, user.email || "");
+        setAuthCookies(res, tokens);
 
-		logger.info({ userId: user.id }, "Tokens refreshed successfully");
+        logger.info({ userId: user.id }, "Tokens refreshed successfully");
 
-		res.json({
-			success: true,
-			accessToken: tokens.accessToken,
-			refreshToken: tokens.refreshToken,
-		});
-	} catch (error) {
-		logger.error({ error }, "Token refresh failed");
-		res.status(500).json({ error: "Token refresh failed" });
-	}
+        res.json({
+            success: true,
+            accessToken: tokens.accessToken,
+            refreshToken: tokens.refreshToken,
+        });
+    } catch (error) {
+        logger.error({ error }, "Token refresh failed");
+        res.status(500).json({ error: "Token refresh failed" });
+    }
 });
 
 // Logout (clear cookies - stateless)
 router.post("/logout", (req, res) => {
-	// Get user ID before clearing cookies to clear their cache
-	const token = req.cookies?.accessToken;
-	let userId: string | null = null;
-	
-	if (token) {
-		try {
-			const decoded = verifyAccessToken(token);
-			if (decoded) {
-				userId = decoded.userId;
-			}
-		} catch (e) {
-			// Ignore invalid tokens
-		}
-	}
-	
-	// Clear connection cache for this user to prevent stale data after re-login
-	if (userId) {
-		const { clearCache, createCacheKey } = require('../utils/cache');
-		clearCache(createCacheKey('connections', userId));
-		logger.info({ userId }, "Cleared connections cache on logout");
-	}
-	
-	clearAuthCookies(res);
+    // Get user ID before clearing cookies to clear their cache
+    const token = req.cookies?.accessToken;
+    let userId: string | null = null;
 
-	logger.info("User logged out successfully");
+    if (token) {
+        try {
+            const decoded = verifyAccessToken(token);
+            if (decoded) {
+                userId = decoded.userId;
+            }
+        } catch (e) {
+            // Ignore invalid tokens
+        }
+    }
 
-	res.json({
-		success: true,
-		message: "Logged out successfully",
-	});
+    // Clear connection cache for this user to prevent stale data after re-login
+    if (userId) {
+        clearCache(createCacheKey('connections', userId));
+        logger.info({ userId }, "Cleared connections cache on logout");
+    }
+
+    clearAuthCookies(res);
+
+    logger.info("User logged out successfully");
+
+    res.json({
+        success: true,
+        message: "Logged out successfully",
+    });
 });
 
 // Check authentication status (optional auth)
 router.get("/status", optionalAuth, async (req, res) => {
-	if (!req.user) {
-		return res.json({
-			authenticated: false,
-			user: null,
-		});
-	}
+    if (!req.user) {
+        return res.json({
+            authenticated: false,
+            user: null,
+        });
+    }
 
-	try {
-		const user = await prisma.user.findUnique({
-			where: { id: req.user.id },
-			select: {
-				id: true,
-				email: true,
-				firstName: true,
+    try {
+        const user = await prisma.user.findUnique({
+            where: { id: req.user.id },
+            select: {
+                id: true,
+                email: true,
+                firstName: true,
                 lastName: true,
                 whatsappPhone: true
-			},
-		});
+            },
+        });
 
-		res.json({
-			authenticated: !!user,
-			user,
-		});
-	} catch (error) {
-		logger.error({ error }, "Error checking auth status");
-		res.json({
-			authenticated: false,
-			user: null,
-		});
-	}
+        res.json({
+            authenticated: !!user,
+            user,
+        });
+    } catch (error) {
+        logger.error({ error }, "Error checking auth status");
+        res.json({
+            authenticated: false,
+            user: null,
+        });
+    }
 });
 
 // Re-authenticate a connection with missing scopes
 // This endpoint returns a redirect URL that the frontend should open to re-auth silently
 // GET /auth/detect-country - Detect user's country from server
 router.get("/detect-country", async (req, res) => {
-	// Return default US values directly without external API calls
-	res.json({ 
-		countryCode: '+1',
-		countryIso: 'US'
-	});
+    // Return default US values directly without external API calls
+    res.json({
+        countryCode: '+1',
+        countryIso: 'US'
+    });
 });
 
 router.post("/reauth-connection", requireAuth, async (req: AuthRequest, res) => {
-	const { connectionId, service } = req.body;
-	const userId = req.user?.id;
+    const { connectionId, service } = req.body;
+    const userId = req.user?.id;
 
-	if (!connectionId || !service) {
-		return res.status(400).json({ error: "Missing connectionId or service" });
-	}
+    if (!connectionId || !service) {
+        return res.status(400).json({ error: "Missing connectionId or service" });
+    }
 
-	if (!['GMAIL', 'CALENDAR'].includes(service)) {
-		return res.status(400).json({ error: "Invalid service" });
-	}
+    if (!['GMAIL', 'CALENDAR'].includes(service)) {
+        return res.status(400).json({ error: "Invalid service" });
+    }
 
-	try {
-		// Try to find the connection
-		const connection = await prisma.serviceToken.findUnique({
-			where: { id: connectionId },
-			select: { userId: true, service: true, accountEmail: true }
-		});
+    try {
+        // Try to find the connection
+        const connection = await prisma.serviceToken.findUnique({
+            where: { id: connectionId },
+            select: { userId: true, service: true, accountEmail: true }
+        });
 
-		// Verify ownership if connection exists
-		if (connection) {
-			if (connection.userId !== userId) {
-				return res.status(403).json({ error: "Access denied to this connection" });
-			}
+        // Verify ownership if connection exists
+        if (connection) {
+            if (connection.userId !== userId) {
+                return res.status(403).json({ error: "Access denied to this connection" });
+            }
 
-			if (connection.service !== service) {
-				return res.status(400).json({ error: "Service mismatch" });
-			}
-		}
+            if (connection.service !== service) {
+                return res.status(400).json({ error: "Service mismatch" });
+            }
+        }
 
-		// Encode reauth data in OAuth state parameter (persists across redirects)
-		const stateData = {
-			userId,
-			service,
-			reauth: true,
-			connectionId: connection ? connectionId : null,
-			accountEmail: connection?.accountEmail,
-			category: 'Personal' // Default category for reauth
-		};
-		
-		const state = Buffer.from(JSON.stringify(stateData)).toString('base64');
-		const authUrl = `${process.env.VITE_API_URL || 'http://localhost:4000'}/auth/google?service=${service}&state=${encodeURIComponent(state)}`;
-		
-		logger.info({ userId, connectionId, service }, "Generating re-auth URL with state parameter");
-		res.json({ authUrl });
+        // Encode reauth data in OAuth state parameter (persists across redirects)
+        const stateData = {
+            userId,
+            service,
+            reauth: true,
+            connectionId: connection ? connectionId : null,
+            accountEmail: connection?.accountEmail,
+            category: 'Personal' // Default category for reauth
+        };
 
-	} catch (error: any) {
-		logger.error({ error, connectionId, service, userId }, "Failed to initiate re-authentication");
-		res.status(500).json({ error: "Failed to initiate re-authentication" });
-	}
+        const state = Buffer.from(JSON.stringify(stateData)).toString('base64');
+        const authUrl = `${process.env.VITE_API_URL || 'http://localhost:4000'}/auth/google?service=${service}&state=${encodeURIComponent(state)}`;
+
+        logger.info({ userId, connectionId, service }, "Generating re-auth URL with state parameter");
+        res.json({ authUrl });
+
+    } catch (error: any) {
+        logger.error({ error, connectionId, service, userId }, "Failed to initiate re-authentication");
+        res.status(500).json({ error: "Failed to initiate re-authentication" });
+    }
 });
 
 export default router;
