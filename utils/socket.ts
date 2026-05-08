@@ -28,7 +28,8 @@ export const initSocket = (server: HttpServer) => {
             const cookies = socket.handshake.headers.cookie.split(';');
             const authCookie = cookies.find(c => c.trim().startsWith('accessToken='));
             if (authCookie) {
-                token = authCookie.split('=')[1].trim();
+                const [, ...tokenParts] = authCookie.split("=");
+                token = tokenParts.join("=").trim();
             }
         }
 
