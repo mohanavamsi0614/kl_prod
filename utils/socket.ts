@@ -1,64 +1,82 @@
-import { Server } from 'socket.io';
-import { Server as HttpServer } from 'http';
-import { verifyAccessToken } from './jwt';
-// @ts-ignore
-import cookie from 'cookie';
-import logger from './logger';
+import { Server as SocketServer } from "socket.io";
+import { Server as HttpServer } from "http";
+import logger from "./logger";
+import { verifyAccessToken } from "./jwt";
 
-let io: Server | null = null;
+let io: SocketServer | null = null;
+const userSockets = new Map<string, string[]>(); // userId -> socketIds[]
 
 export const initSocket = (server: HttpServer) => {
-    io = new Server(server, {
+    io = new SocketServer(server, {
         cors: {
-            origin: process.env.VITE_API_URL || 'http://localhost:5173',
-            methods: ['GET', 'POST'],
-            credentials: true
+            origin: "*", // Adjust in production
+            methods: ["GET", "POST"]
         }
     });
 
     io.use((socket, next) => {
-        const cookies = cookie.parse(socket.handshake.headers.cookie || '');
-        const token = socket.handshake.auth?.token || cookies.accessToken;
+        let token = socket.handshake.auth.token || socket.handshake.query.token;
+        
+        // Fallback to cookies
+        if (!token && socket.handshake.headers.cookie) {
+            const cookies = socket.handshake.headers.cookie.split(';');
+            const authCookie = cookies.find(c => c.trim().startsWith('accessToken='));
+            if (authCookie) {
+                token = authCookie.split('=')[1].trim();
+            }
+        }
 
         if (!token) {
-            return next(new Error('Authentication error'));
+            return next(new Error("Authentication error"));
         }
 
         try {
             const decoded = verifyAccessToken(token);
-            if (!decoded) {
-                return next(new Error('Authentication error'));
+            if (decoded && decoded.userId) {
+                (socket as any).userId = decoded.userId;
+                next();
+            } else {
+                next(new Error("Invalid token"));
             }
-            (socket as any).userId = decoded.userId;
-            next();
         } catch (err) {
-            next(new Error('Authentication error'));
+            next(new Error("Authentication error"));
         }
     });
 
-    io.on('connection', (socket) => {
+    io.on("connection", (socket) => {
         const userId = (socket as any).userId;
-        logger.info({ userId, socketId: socket.id }, 'User connected to socket');
-        
-        socket.join(`user:${userId}`);
+        logger.info({ userId, socketId: socket.id }, "Socket connected");
 
-        socket.on('disconnect', () => {
-            logger.info({ userId, socketId: socket.id }, 'User disconnected from socket');
+        if (userId) {
+            const sockets = userSockets.get(userId) || [];
+            userSockets.set(userId, [...sockets, socket.id]);
+        }
+
+        socket.on("disconnect", () => {
+            logger.info({ userId, socketId: socket.id }, "Socket disconnected");
+            if (userId) {
+                const sockets = userSockets.get(userId) || [];
+                userSockets.set(userId, sockets.filter(id => id !== socket.id));
+            }
         });
     });
 
     return io;
 };
 
-export const getIO = () => {
+export const getIo = () => {
     if (!io) {
-        throw new Error('Socket.io not initialized');
+        throw new Error("Socket.io not initialized");
     }
     return io;
 };
 
 export const emitToUser = (userId: string, event: string, data: any) => {
-    if (io) {
-        io.to(`user:${userId}`).emit(event, data);
+    if (!io) return;
+    const socketIds = userSockets.get(userId);
+    if (socketIds) {
+        socketIds.forEach(id => {
+            io?.to(id).emit(event, data);
+        });
     }
 };

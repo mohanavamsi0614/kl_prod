@@ -40,13 +40,11 @@ router.get('/events', validateConnection, async (req: AuthRequest, res) => {
         await TokenManager.ensureTokenHasScopes(connectionId, 'MICROSOFT_CALENDAR');
         const client = await getMicrosoftClient(connectionId);
 
-        const response = await client.get('/me/calendar/calendarView', {
+        const response = await client.get('/me/calendar/events', {
             params: {
-                'startDateTime': startDate || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
-                'endDateTime': endDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
                 '$select': 'id,subject,bodyPreview,start,end,location,attendees,onlineMeeting',
-                '$orderby': 'start/dateTime',
-                '$top': 100
+                '$filter': startDate && endDate ? `start/dateTime ge '${startDate}' and end/dateTime le '${endDate}'` : undefined,
+                '$orderby': 'start/dateTime'
             }
         });
 
@@ -72,19 +70,8 @@ router.get('/events', validateConnection, async (req: AuthRequest, res) => {
         res.json({ events });
 
     } catch (error: any) {
-        const status = error.response?.status;
-        const data = error.response?.data;
-        logger.error({ 
-            error: error.message, 
-            status, 
-            data,
-            connectionId 
-        }, "Outlook Calendar fetch error");
-        
-        res.status(status || 500).json({ 
-            error: "Failed to fetch events",
-            details: data?.error?.message || error.message
-        });
+        logger.error({ error: error.message, connectionId }, "Outlook Calendar fetch error");
+        res.status(500).json({ error: "Failed to fetch events" });
     }
 });
 

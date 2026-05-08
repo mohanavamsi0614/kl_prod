@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Mail, Star, Trash2, RefreshCw, Search, Link as LinkIcon, X, CheckCircle, Inbox, ArrowLeft, CornerUpLeft, Send, MoreVertical, Paperclip, ExternalLink, File, Download, AlertCircle, LogOut, Calendar } from 'lucide-react';
 import { api } from '../../lib/api';
+import { getSocket } from '../../lib/socket';
 import DateRangePicker from '../../components/DateRangePicker';
 import ProductivityLoader from '../../components/ui/ProductivityLoader';
 import ProductivitySpinner from '../../components/ui/ProductivitySpinner';
 import type { Email, CalendarCategory, ApiConnection } from '../../types';
-import { getSocket } from '../../lib/socket';
 
 interface Attachment {
     id: string;
@@ -281,8 +281,8 @@ const EmailPage: React.FC = () => {
                       subject: msg.subject,
                       from: msg.from,
                       date: msg.date,
-                      preview: msg.preview || msg.snippet || '',
-                      body: msg.body || msg.preview || msg.snippet || '',
+                      preview: msg.snippet,
+                      body: msg.body || msg.snippet,
                       attachments: msg.attachments || [],
                       inlineAttachments: msg.inlineAttachments || [],
                       accountId: res.accountId,
@@ -300,6 +300,7 @@ const EmailPage: React.FC = () => {
                       newTokens[res.accountId] = res.nextPageToken;
                   }
               });
+
               // Sort by date descending
               allNewEmails.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
@@ -458,7 +459,7 @@ const EmailPage: React.FC = () => {
           const mappedMail: ExtendedEmail = {
               ...newMail,
               date: newMail.receivedDateTime,
-              preview: newMail.bodyPreview || newMail.snippet || '',
+              preview: newMail.bodyPreview,
               read: false,
               provider: 'Outlook',
               // Find matching account to get category/color
@@ -596,7 +597,6 @@ const EmailPage: React.FC = () => {
     }
   };
 
-  const [isLoadingDetail, setIsLoadingDetail] = useState(false);
 
   const handleEmailClick = async (email: ExtendedEmail) => {
     // Don't mark as read immediately - only mark when closing the email view
@@ -606,7 +606,6 @@ const EmailPage: React.FC = () => {
 
     // If it's Outlook and we don't have the body yet, fetch it
     if ((email as any).provider === 'Outlook' && !email.body) {
-        setIsLoadingDetail(true);
         try {
             const detail = await api.get<any>(`/api/outlook/message/${email.id}?accountId=${email.accountId}`);
             setEmails(prev => prev.map(e => e.id === email.id ? { 
@@ -625,8 +624,7 @@ const EmailPage: React.FC = () => {
             console.error("Failed to fetch email detail", err);
             showNotification("Failed to load full email content", "error");
         } finally {
-            setIsLoadingDetail(false);
-        }
+            }
     }
   };
 
@@ -1006,7 +1004,7 @@ const EmailPage: React.FC = () => {
                 
                 {/* If Email Selected -> Show Detail View */}
                 {selectedEmail ? (
-                    <div className="flex flex-col h-full relative animate-in slide-in-from-right-4 duration-200">
+                    <div className="flex flex-col h-full animate-in slide-in-from-right-4 duration-200">
                         {/* Detail Header */}
                         <div className="p-3 md:p-4 border-b border-slate-200 dark:border-dark-border flex justify-between items-center bg-slate-50/50 dark:bg-slate-800/30 shrink-0">
                              <div className="flex items-center gap-2 md:gap-3 min-w-0">
@@ -1031,11 +1029,6 @@ const EmailPage: React.FC = () => {
 
                         {/* Detail Body */}
                         <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
-                             {isLoadingDetail && (
-                                 <div className="absolute inset-0 bg-white/50 dark:bg-black/20 backdrop-blur-sm z-50 flex items-center justify-center">
-                                     <ProductivityLoader fullScreen={false} text="Loading email content..." />
-                                 </div>
-                             )}
                              <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start mb-6 gap-2">
                                  <h2 className="text-xl md:text-2xl font-bold text-slate-900 dark:text-white leading-tight">{selectedEmail.subject}</h2>
                                  <span className="text-xs sm:text-sm text-slate-500 whitespace-nowrap">{selectedEmail.date}</span>
