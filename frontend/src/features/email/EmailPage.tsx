@@ -281,8 +281,8 @@ const EmailPage: React.FC = () => {
                       subject: msg.subject,
                       from: msg.from,
                       date: msg.date,
-                      preview: msg.snippet,
-                      body: msg.body || msg.snippet,
+                      preview: msg.preview || msg.snippet || '',
+                      body: msg.body || msg.preview || msg.snippet || '',
                       attachments: msg.attachments || [],
                       inlineAttachments: msg.inlineAttachments || [],
                       accountId: res.accountId,
@@ -459,7 +459,7 @@ const EmailPage: React.FC = () => {
           const mappedMail: ExtendedEmail = {
               ...newMail,
               date: newMail.receivedDateTime,
-              preview: newMail.bodyPreview,
+              preview: newMail.bodyPreview || newMail.snippet || '',
               read: false,
               provider: 'Outlook',
               // Find matching account to get category/color
