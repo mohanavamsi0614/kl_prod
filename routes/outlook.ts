@@ -2,6 +2,7 @@ import { Router, Response } from "express";
 import { requireAuth, AuthRequest } from "../middleware/auth";
 import { TokenManager } from "../services/TokenManager";
 import { getMicrosoftClient } from "../services/microsoftClient";
+import { queueMailUpdate } from "../workers/mailWorker";
 import logger from "../utils/logger";
 import prisma from "../lib/prisma";
 import { getCached, setCached, clearCache, createCacheKey } from "../utils/cache";
@@ -199,6 +200,48 @@ router.post("/mark-as-read", requireAuth, async (req: AuthRequest, res: Response
         logger.error({ error: error.message }, "Outlook mark-as-read error");
         res.status(500).json({ error: "Failed to mark as read" });
     }
+});
+
+/**
+ * Webhook endpoint for Microsoft Graph notifications
+ */
+router.post("/webhook", async (req, res) => {
+    // 1. Handle validation handshake
+    const validationToken = req.query.validationToken as string;
+    if (validationToken) {
+        logger.info("Microsoft Graph webhook validation successful");
+        return res.status(200).send(validationToken);
+    }
+
+    // 2. Process notifications
+    const notifications = req.body.value;
+    if (!notifications || !Array.isArray(notifications)) {
+        return res.status(200).send();
+    }
+
+    for (const notification of notifications) {
+        const userId = notification.clientState; // We passed userId in clientState
+        const subscriptionId = notification.subscriptionId;
+        const resourceData = notification.resourceData;
+
+        if (notification.changeType === "created" && resourceData?.["@odata.type"] === "#Microsoft.Graph.Message") {
+            const messageId = resourceData.id;
+            
+            // Find the connection for this user
+            const connection = await prisma.serviceToken.findFirst({
+                where: { 
+                    userId,
+                    service: "OUTLOOK"
+                }
+            });
+
+            if (connection) {
+                queueMailUpdate(userId, connection.id, messageId);
+            }
+        }
+    }
+
+    res.status(202).send();
 });
 
 export default router;

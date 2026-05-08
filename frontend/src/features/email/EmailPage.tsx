@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Mail, Star, Trash2, RefreshCw, Search, Link as LinkIcon, X, CheckCircle, Inbox, ArrowLeft, CornerUpLeft, Send, MoreVertical, Paperclip, ExternalLink, File, Download, AlertCircle, LogOut, Calendar } from 'lucide-react';
 import { api } from '../../lib/api';
+import { getSocket } from '../../lib/socket';
 import DateRangePicker from '../../components/DateRangePicker';
 import ProductivityLoader from '../../components/ui/ProductivityLoader';
 import ProductivitySpinner from '../../components/ui/ProductivitySpinner';
@@ -396,7 +397,7 @@ const EmailPage: React.FC = () => {
           if (hasEmail || retries >= maxRetries) {
             await fetchData(true);
             // Don't clear isLinking here - let fetchData handle it with proper timing
-            if (hasGmail) {
+            if (hasEmail) {
               showNotification("Email account linked successfully!", "success");
             }
           } else {
@@ -445,6 +446,43 @@ const EmailPage: React.FC = () => {
     }, syncIntervalMs);
     return () => clearInterval(interval);
   }, [selectedAccountId, filterUnread, syncIntervalMs]);
+
+  // Socket.io for Real-time updates
+  useEffect(() => {
+      const socket = getSocket();
+      if (!socket) return;
+
+      const handleNewMail = (newMail: any) => {
+          console.log('Real-time mail received in EmailPage:', newMail);
+          
+          // Map to ExtendedEmail format
+          const mappedMail: ExtendedEmail = {
+              ...newMail,
+              date: newMail.receivedDateTime,
+              preview: newMail.bodyPreview,
+              read: false,
+              provider: 'Outlook',
+              // Find matching account to get category/color
+              ...(accounts.find(a => a.provider === 'Outlook') || {})
+          };
+
+          // Update emails list
+          setEmails(prev => {
+              // Avoid duplicates
+              if (prev.some(e => e.id === mappedMail.id)) return prev;
+              
+              const updated = [mappedMail, ...prev];
+              // Sort by date
+              return updated.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+          });
+      };
+
+      socket.on('new_mail', handleNewMail);
+
+      return () => {
+          socket.off('new_mail', handleNewMail);
+      };
+  }, [accounts]);
 
   const handleLoadMore = () => {
       if (prefetchedData) {
@@ -559,7 +597,6 @@ const EmailPage: React.FC = () => {
     }
   };
 
-  const [isLoadingDetail, setIsLoadingDetail] = useState(false);
 
   const handleEmailClick = async (email: ExtendedEmail) => {
     // Don't mark as read immediately - only mark when closing the email view
@@ -569,7 +606,6 @@ const EmailPage: React.FC = () => {
 
     // If it's Outlook and we don't have the body yet, fetch it
     if ((email as any).provider === 'Outlook' && !email.body) {
-        setIsLoadingDetail(true);
         try {
             const detail = await api.get<any>(`/api/outlook/message/${email.id}?accountId=${email.accountId}`);
             setEmails(prev => prev.map(e => e.id === email.id ? { 
@@ -588,8 +624,7 @@ const EmailPage: React.FC = () => {
             console.error("Failed to fetch email detail", err);
             showNotification("Failed to load full email content", "error");
         } finally {
-            setIsLoadingDetail(false);
-        }
+            }
     }
   };
 

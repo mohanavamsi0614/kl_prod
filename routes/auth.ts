@@ -2,6 +2,7 @@ import express from "express";
 import passport from "../lib/auth";
 import { requireAuth, AuthRequest, optionalAuth } from "../middleware/auth";
 import { generateTokenPair, verifyRefreshToken, verifyAccessToken } from "../utils/jwt";
+import { OutlookSyncService } from "../services/outlookSyncService";
 import logger from "../utils/logger";
 import { hashPassword } from "../utils/password";
 import { encryptToken } from "../utils/encryption";
@@ -226,7 +227,33 @@ router.get("/microsoft", (req, res) => {
     const service = (req.query.service as string) || "AUTH";
     const category = (req.query.category as string) || "Personal";
 
-    const userId = req.cookies?.userId;
+    const token = req.cookies?.accessToken;
+    const refreshToken = req.cookies?.refreshToken;
+    let userId: string | undefined;
+
+    // Try to get user ID from access token
+    if (token) {
+        try {
+            const decoded = verifyAccessToken(token);
+            if (decoded && decoded.userId) {
+                userId = decoded.userId;
+            }
+        } catch (e) {
+            // Ignore invalid tokens
+        }
+    }
+
+    // Fallback to refresh token
+    if (!userId && refreshToken) {
+        try {
+            const decoded = verifyRefreshToken(refreshToken);
+            if (decoded && decoded.userId) {
+                userId = decoded.userId;
+            }
+        } catch (e) {
+            // Ignore invalid tokens
+        }
+    }
 
     const stateObj: any = {
         category,
@@ -242,12 +269,13 @@ router.get("/microsoft", (req, res) => {
         .from(JSON.stringify(stateObj))
         .toString("base64");
 
+    // Start with minimal identity scopes
     const scopes = [
         "openid",
         "profile",
         "email",
         "User.Read",
-        "offline_access"
+        "offline_access" // Required for refresh tokens
     ];
 
     if (service === "MAIL") {
@@ -262,18 +290,25 @@ router.get("/microsoft", (req, res) => {
         );
     }
 
-    const params = new URLSearchParams({
+    const params: any = {
         client_id: MS_CLIENT_ID || "",
         response_type: "code",
         redirect_uri: MS_REDIRECT_URI,
         response_mode: "query",
         scope: scopes.join(" "),
-        prompt: "consent",
         state
-    });
+    };
+
+    // Only force consent for service linking to ensure refresh tokens are provided
+    // For basic login, let Microsoft decide if consent is needed
+    if (service !== "AUTH") {
+        params.prompt = "consent";
+    }
+
+    const queryParams = new URLSearchParams(params);
 
     res.redirect(
-        `${MS_AUTH_BASE}/authorize?${params.toString()}`
+        `${MS_AUTH_BASE}/authorize?${queryParams.toString()}`
     );
 });
 
@@ -347,7 +382,7 @@ router.get("/microsoft/callback", async (req, res) => {
             if (service === 'MAIL' || service === 'CALENDAR' || isLinking) {
                 const msService = service === 'CALENDAR' ? 'MICROSOFT_CALENDAR' : 'OUTLOOK';
 
-                await prisma.serviceToken.upsert({
+                const connection = await prisma.serviceToken.upsert({
                     where: {
                         userId_service_accountEmail: {
                             userId: user.id,
@@ -373,6 +408,15 @@ router.get("/microsoft/callback", async (req, res) => {
                         category: (stateParam ? JSON.parse(Buffer.from(stateParam, 'base64').toString('utf-8')).category : 'Personal') || 'Personal'
                     }
                 });
+
+                if (service === 'MAIL') {
+                    try {
+                        await OutlookSyncService.subscribeToMail(connection.id, user.id);
+                    } catch (error) {
+                        logger.error({ error, userId: user.id }, "Failed to subscribe to Outlook mail sync");
+                        // Don't fail the whole auth flow if subscription fails
+                    }
+                }
 
                 clearCache(createCacheKey('connections', user.id));
             }
