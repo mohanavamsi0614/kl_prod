@@ -17,7 +17,7 @@ router.get('/summary', async (req: AuthRequest, res) => {
     try {
         const connections = await prisma.serviceToken.findMany({
             where: { userId },
-            select: { id: true, service: true, accountEmail: true, provider: true }
+            select: { id: true, service: true, accountEmail: true }
         });
 
         const now = new Date();
