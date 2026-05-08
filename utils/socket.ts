@@ -7,9 +7,15 @@ let io: SocketServer | null = null;
 const userSockets = new Map<string, string[]>(); // userId -> socketIds[]
 
 export const initSocket = (server: HttpServer) => {
+    const allowedOrigins = [
+        process.env.FRONTEND_URL,
+        process.env.CLIENT_URL,
+        "http://localhost:5173"
+    ].filter(Boolean) as string[];
+
     io = new SocketServer(server, {
         cors: {
-            origin: "*", // Adjust in production
+            origin: allowedOrigins.length > 0 ? allowedOrigins : false,
             methods: ["GET", "POST"]
         }
     });
@@ -22,7 +28,8 @@ export const initSocket = (server: HttpServer) => {
             const cookies = socket.handshake.headers.cookie.split(';');
             const authCookie = cookies.find(c => c.trim().startsWith('accessToken='));
             if (authCookie) {
-                token = authCookie.split('=')[1].trim();
+                const [, ...tokenParts] = authCookie.split("=");
+                token = tokenParts.join("=").trim();
             }
         }
 

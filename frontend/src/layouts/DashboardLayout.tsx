@@ -13,7 +13,7 @@ interface DashboardLayoutProps {
 const DashboardLayout: React.FC<DashboardLayoutProps> = ({ theme, toggleTheme, onLogout }) => {
   useEffect(() => {
     // Initialize socket globally for the authenticated session
-    const socket = initSocket(''); // Uses cookie-based auth
+    const socket = initSocket(); // Uses cookie-based auth
     
     socket.on('new_mail', (mail: any) => {
       toast.success(`New Email: ${mail.subject}`, {

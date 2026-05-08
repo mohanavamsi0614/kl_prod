@@ -16,7 +16,8 @@ export const queueMailUpdate = (userId: string, connectionId: string, messageId:
             const client = await getMicrosoftClient(connectionId);
             
             // Fetch the specific message
-            const response = await client.get(`/me/messages/${messageId}`);
+            const safeMessageId = encodeURIComponent(messageId);
+            const response = await client.get(`/me/messages/${safeMessageId}`);
             const message = response.data;
 
             // Emit to user via socket
