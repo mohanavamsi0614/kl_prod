@@ -210,7 +210,9 @@ router.post("/webhook", async (req, res) => {
     const validationToken = req.query.validationToken as string;
     if (validationToken) {
         logger.info("Microsoft Graph webhook validation successful");
-        return res.status(200).send(validationToken);
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.setHeader("X-Content-Type-Options", "nosniff");
+        return res.status(200).end(validationToken, "utf8");
     }
 
     // 2. Process notifications

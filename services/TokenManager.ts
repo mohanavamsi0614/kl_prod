@@ -291,7 +291,7 @@ export class TokenManager {
             );
         }
 
-        const grantedScopes = tokenRecord.grantedScopes.split(',').map(s => s.trim());
+        const grantedScopes = tokenRecord.grantedScopes.split(/[\s,]+/).map(s => s.trim());
         
         const requiredScopes: Record<string, string[]> = {
             'GMAIL': [

@@ -79,6 +79,7 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onNavigateToSignup, onBa
 
   const [isLoading, setIsLoading] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
+  const [isMicrosoftLoading, setIsMicrosoftLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -124,7 +125,7 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onNavigateToSignup, onBa
   };
 
   const handleMicrosoftLogin = () => {
-    setIsLoading(true);
+    setIsMicrosoftLoading(true);
     window.location.href = `${import.meta.env.VITE_API_URL}/auth/microsoft?service=AUTH`;
   };
 
@@ -244,11 +245,11 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onNavigateToSignup, onBa
 
         <button
           onClick={handleMicrosoftLogin}
-          disabled={isLoading || isGoogleLoading}
+          disabled={isLoading || isGoogleLoading || isMicrosoftLoading}
           className="w-full py-3.5 rounded-xl border border-slate-200 dark:border-dark-border hover:bg-slate-50 dark:hover:bg-slate-800 transition-all flex items-center justify-center gap-3 text-slate-700 dark:text-white font-medium"
         >
-          {isLoading && !isGoogleLoading ? <ProductivitySpinner size="sm" /> : <MicrosoftLogo />}
-          {isLoading && !isGoogleLoading ? 'Connecting...' : 'Microsoft'}
+          {isMicrosoftLoading ? <ProductivitySpinner size="sm" /> : <MicrosoftLogo />}
+          {isMicrosoftLoading ? 'Connecting...' : 'Microsoft'}
         </button>
 
         <div className="mt-8 pt-6 border-t border-slate-100 dark:border-slate-800 text-center">
