@@ -5,12 +5,18 @@ import { verifyAccessToken } from "./jwt";
 
 let io: SocketServer | null = null;
 const userSockets = new Map<string, string[]>(); // userId -> socketIds[]
+const allowedOrigins = [
+    ...(process.env.VITE_API_URL ? process.env.VITE_API_URL.split(",").map((url) => url.trim()) : []),
+    "http://localhost:5173",
+    "http://127.0.0.1:5173"
+].filter(Boolean);
 
 export const initSocket = (server: HttpServer) => {
     io = new SocketServer(server, {
         cors: {
-            origin: "*", // Adjust in production
-            methods: ["GET", "POST"]
+            origin: allowedOrigins,
+            methods: ["GET", "POST"],
+            credentials: true
         }
     });
 
