@@ -12,7 +12,7 @@ export class OutlookSyncService {
                 changeType: "created",
                 notificationUrl: notificationUrl,
                 resource: "me/mailFolders('Inbox')/messages",
-                expirationDateTime: new Date(Date.now() + 4230 * 60 * 1000).toISOString(), // Max ~2.9 days
+                expirationDateTime: new Date(Date.now() + 4230 * 60 * 1000).toISOString(), // Max ~2.94 days
                 clientState: userId
             };
 

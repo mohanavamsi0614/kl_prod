@@ -209,8 +209,11 @@ router.post("/webhook", async (req, res) => {
     // 1. Handle validation handshake
     const validationToken = req.query.validationToken as string;
     if (validationToken) {
+        if (!/^[A-Za-z0-9\-._~%]+$/.test(validationToken)) {
+            return res.status(400).send("Invalid validation token");
+        }
         logger.info("Microsoft Graph webhook validation successful");
-        return res.status(200).send(validationToken);
+        return res.status(200).type("text/plain").send(validationToken);
     }
 
     // 2. Process notifications

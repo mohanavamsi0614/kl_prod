@@ -2,15 +2,13 @@ import { io, Socket } from 'socket.io-client';
 
 let socket: Socket | null = null;
 
-export const initSocket = (token: string) => {
+export const initSocket = (token?: string) => {
     if (socket) {
         socket.disconnect();
     }
 
     socket = io({
-        auth: {
-            token
-        },
+        auth: token ? { token } : undefined,
         transports: ['websocket']
     });
 
