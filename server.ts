@@ -24,17 +24,19 @@ import outlookCalendarRouter from "./routes/outlookCalendar";
 import dashboardRouter from "./routes/dashboard";
 import { requestIdMiddleware } from "./middleware/requestId";
 import prisma from "./lib/prisma";
+import { createServer } from "http";
+import { initSocket } from "./utils/socket";
+import { initMailWorker } from "./workers/mailWorker";
 import { verifyAccessToken } from "./utils/jwt";
-import { createServer } from 'http';
-import { initSocket } from './utils/socket';
-import { initMailWorker } from './workers/mailWorker';
 
 // Load environment variables first
 const app = express();
-const httpServer = createServer(app);
+const server = createServer(app);
 
-// Initialize Socket.io and background workers
-initSocket(httpServer);
+// Initialize Socket.io
+initSocket(server);
+
+// Initialize Background Workers
 initMailWorker();
 
 // Validate required environment variables
@@ -287,7 +289,7 @@ app.get("*", (req, res, next) => {
 });
 
 // 🔹 Start server
-httpServer.listen(Number(PORT), () => {
+server.listen(Number(PORT), () => {
 	const host = process.env.VITE_API_URL || `http://localhost:${PORT}`;
 	logger.info(`Server running on ${host}`);
 });

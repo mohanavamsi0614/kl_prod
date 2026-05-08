@@ -150,13 +150,14 @@ const CreateAccountPage: React.FC<CreateAccountPageProps> = ({ onLogin, onNaviga
         }
     };
 
-    const handleSsoSignup = (provider: 'google' | 'microsoft') => {
-        if (provider === 'google') {
-            setIsGoogleLoading(true);
-        } else {
-            setIsMicrosoftLoading(true);
-        }
-        window.location.href = `${import.meta.env.VITE_API_URL}/auth/${provider}?service=AUTH`;
+    const handleGoogleSignup = () => {
+        setIsGoogleLoading(true);
+        window.location.href = `${import.meta.env.VITE_API_URL}/auth/google?service=AUTH`;
+    };
+
+    const handleMicrosoftSignup = () => {
+        setIsMicrosoftLoading(true);
+        window.location.href = `${import.meta.env.VITE_API_URL}/auth/microsoft?service=AUTH`;
     };
 
     const handleGooglePhoneSubmit = (e: React.FormEvent) => {
@@ -342,7 +343,7 @@ const CreateAccountPage: React.FC<CreateAccountPageProps> = ({ onLogin, onNaviga
                             ) : (
                                 <>
                                     <button
-                                        onClick={() => handleSsoSignup('google')}
+                                        onClick={handleGoogleSignup}
                                         disabled={isGoogleLoading || isMicrosoftLoading || isLoading}
                                         className="w-full py-3.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all flex items-center justify-center gap-3 text-slate-700 dark:text-white font-medium mb-3 group"
                                     >
@@ -353,7 +354,7 @@ const CreateAccountPage: React.FC<CreateAccountPageProps> = ({ onLogin, onNaviga
                                     </button>
 
                                     <button
-                                        onClick={() => handleSsoSignup('microsoft')}
+                                        onClick={handleMicrosoftSignup}
                                         disabled={isGoogleLoading || isMicrosoftLoading || isLoading}
                                         className="w-full py-3.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all flex items-center justify-center gap-3 text-slate-700 dark:text-white font-medium mb-6 group"
                                     >

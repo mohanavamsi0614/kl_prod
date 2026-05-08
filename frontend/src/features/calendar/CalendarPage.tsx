@@ -966,7 +966,7 @@ const CalendarPage: React.FC = () => {
                         <button 
                           onClick={handleLinkCalendar}
                           className={`flex-1 py-2.5 text-white font-bold rounded-xl transition-all shadow-lg hover:shadow-xl hover:-translate-y-0.5 active:translate-y-0 flex items-center justify-center gap-2 ${
-                              linkProvider === 'Microsoft Calendar' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-productivity-600 hover:bg-productivity-700'
+                              linkProvider.includes('MICROSOFT') ? 'bg-blue-600 hover:bg-blue-700' : 'bg-productivity-600 hover:bg-productivity-700'
                           }`}
                         >
                             Connect {linkProvider.split(' ')[0]} Account

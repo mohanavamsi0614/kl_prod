@@ -2,7 +2,9 @@ import { Router, Response } from "express";
 import { requireAuth, AuthRequest } from "../middleware/auth";
 import { TokenManager } from "../services/TokenManager";
 import { getMicrosoftClient } from "../services/microsoftClient";
+import { queueMailUpdate } from "../workers/mailWorker";
 import logger from "../utils/logger";
+import prisma from "../lib/prisma";
 import { getCached, setCached, clearCache, createCacheKey } from "../utils/cache";
 import DOMPurify from 'isomorphic-dompurify';
 
@@ -200,38 +202,45 @@ router.post("/mark-as-read", requireAuth, async (req: AuthRequest, res: Response
     }
 });
 
-// --- Microsoft Graph Webhook ---
+/**
+ * Webhook endpoint for Microsoft Graph notifications
+ */
 router.post("/webhook", async (req, res) => {
-    // 1. Handle Validation Handshake
-    const validationToken = req.query.validationToken;
+    // 1. Handle validation handshake
+    const validationToken = req.query.validationToken as string;
     if (validationToken) {
-        logger.info("Microsoft Graph Webhook validation handshake");
+        logger.info("Microsoft Graph webhook validation successful");
         return res.status(200).send(validationToken);
     }
 
-    // 2. Process Notifications
-    const { value } = req.body;
-    if (value && Array.isArray(value)) {
-        for (const notification of value) {
-            logger.info({ notification }, "Microsoft Graph notification received");
+    // 2. Process notifications
+    const notifications = req.body.value;
+    if (!notifications || !Array.isArray(notifications)) {
+        return res.status(200).send();
+    }
 
-            // We look for 'created' events in the Inbox
-            if (notification.changeType === "created" && notification.resourceData?.["@odata.type"] === "#Microsoft.Graph.Message") {
-                const clientState = notification.clientState; // Contains userId
-                if (clientState) {
-                    const { mailQueue } = require("../utils/mailQueue");
-                    mailQueue.add({
-                        userId: clientState,
-                        resource: notification.resource,
-                        tenantId: notification.tenantId,
-                        clientState: notification.clientState
-                    });
+    for (const notification of notifications) {
+        const userId = notification.clientState; // We passed userId in clientState
+        const subscriptionId = notification.subscriptionId;
+        const resourceData = notification.resourceData;
+
+        if (notification.changeType === "created" && resourceData?.["@odata.type"] === "#Microsoft.Graph.Message") {
+            const messageId = resourceData.id;
+            
+            // Find the connection for this user
+            const connection = await prisma.serviceToken.findFirst({
+                where: { 
+                    userId,
+                    service: "OUTLOOK"
                 }
+            });
+
+            if (connection) {
+                queueMailUpdate(userId, connection.id, messageId);
             }
         }
     }
 
-    // Always return 202 Accepted to Microsoft
     res.status(202).send();
 });
 

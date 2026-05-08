@@ -1,44 +1,38 @@
-import logger from './logger';
+import logger from "./logger";
 
-type MailTask = {
-    userId: string;
-    resource: string;
-    tenantId: string;
-    clientState?: string;
-};
+type Task = () => Promise<void>;
 
 class MailQueue {
-    private queue: MailTask[] = [];
-    private processing = false;
-    private handlers: ((task: MailTask) => Promise<void>)[] = [];
+    private queue: Task[] = [];
+    private isProcessing = false;
 
-    async add(task: MailTask) {
-        logger.info({ userId: task.userId }, 'Adding mail task to queue');
+    async add(task: Task) {
         this.queue.push(task);
         this.process();
     }
 
-    onProcess(handler: (task: MailTask) => Promise<void>) {
-        this.handlers.push(handler);
-    }
-
     private async process() {
-        if (this.processing || this.queue.length === 0) return;
+        if (this.isProcessing || this.queue.length === 0) {
+            return;
+        }
 
-        this.processing = true;
-        
-        while (this.queue.length > 0) {
-            const task = this.queue.shift();
-            if (task) {
-                try {
-                    await Promise.all(this.handlers.map(handler => handler(task)));
-                } catch (err) {
-                    logger.error({ err, task }, 'Error processing mail task');
-                }
+        this.isProcessing = true;
+        const task = this.queue.shift();
+
+        if (task) {
+            try {
+                await task();
+            } catch (error) {
+                logger.error({ error }, "Error processing mail task");
             }
         }
 
-        this.processing = false;
+        this.isProcessing = false;
+        this.process();
+    }
+
+    get length() {
+        return this.queue.length;
     }
 }
 

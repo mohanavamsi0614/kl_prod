@@ -2,6 +2,7 @@ import express from "express";
 import passport from "../lib/auth";
 import { requireAuth, AuthRequest, optionalAuth } from "../middleware/auth";
 import { generateTokenPair, verifyRefreshToken, verifyAccessToken } from "../utils/jwt";
+import { OutlookSyncService } from "../services/outlookSyncService";
 import logger from "../utils/logger";
 import { hashPassword } from "../utils/password";
 import { encryptToken } from "../utils/encryption";
@@ -119,8 +120,8 @@ router.get("/google", (req, res, next) => {
     passport.authenticate("google", {
         scope: scopes,
         session: false,
-        accessType: 'offline',
-        prompt: 'consent',
+        accessType: 'offline', // Critical for receiving a refresh token
+        prompt: 'consent',      // Force consent to ensure refresh token is returned
         state: state
     })(req, res, next);
 });
@@ -226,7 +227,33 @@ router.get("/microsoft", (req, res) => {
     const service = (req.query.service as string) || "AUTH";
     const category = (req.query.category as string) || "Personal";
 
-    const userId = req.cookies?.userId;
+    const token = req.cookies?.accessToken;
+    const refreshToken = req.cookies?.refreshToken;
+    let userId: string | undefined;
+
+    // Try to get user ID from access token
+    if (token) {
+        try {
+            const decoded = verifyAccessToken(token);
+            if (decoded && decoded.userId) {
+                userId = decoded.userId;
+            }
+        } catch (e) {
+            // Ignore invalid tokens
+        }
+    }
+
+    // Fallback to refresh token
+    if (!userId && refreshToken) {
+        try {
+            const decoded = verifyRefreshToken(refreshToken);
+            if (decoded && decoded.userId) {
+                userId = decoded.userId;
+            }
+        } catch (e) {
+            // Ignore invalid tokens
+        }
+    }
 
     const stateObj: any = {
         category,
@@ -242,12 +269,13 @@ router.get("/microsoft", (req, res) => {
         .from(JSON.stringify(stateObj))
         .toString("base64");
 
+    // Start with minimal identity scopes
     const scopes = [
         "openid",
         "profile",
         "email",
         "User.Read",
-        "offline_access"
+        "offline_access" // Required for refresh tokens
     ];
 
     if (service === "MAIL") {
@@ -271,12 +299,16 @@ router.get("/microsoft", (req, res) => {
         state
     };
 
-    const paramsObj = new URLSearchParams(params);
+    // Only force consent for service linking to ensure refresh tokens are provided
+    // For basic login, let Microsoft decide if consent is needed
+    if (service !== "AUTH") {
+        params.prompt = "consent";
+    }
 
-    logger.info({ service, scopes, isLinking: !!userId }, "Initiating Microsoft OAuth");
+    const queryParams = new URLSearchParams(params);
 
     res.redirect(
-        `${MS_AUTH_BASE}/authorize?${paramsObj.toString()}`
+        `${MS_AUTH_BASE}/authorize?${queryParams.toString()}`
     );
 });
 
@@ -350,7 +382,7 @@ router.get("/microsoft/callback", async (req, res) => {
             if (service === 'MAIL' || service === 'CALENDAR' || isLinking) {
                 const msService = service === 'CALENDAR' ? 'MICROSOFT_CALENDAR' : 'OUTLOOK';
 
-                await prisma.serviceToken.upsert({
+                const connection = await prisma.serviceToken.upsert({
                     where: {
                         userId_service_accountEmail: {
                             userId: user.id,
@@ -377,16 +409,12 @@ router.get("/microsoft/callback", async (req, res) => {
                     }
                 });
 
-                // Initialize real-time subscription if it's Outlook mail
-                if (msService === 'OUTLOOK') {
+                if (service === 'MAIL') {
                     try {
-                        const { OutlookSyncService } = require('../services/outlookSyncService');
-                        await OutlookSyncService.subscribeToMail(
-                            (await prisma.serviceToken.findFirst({ where: { userId: user.id, service: 'OUTLOOK', accountEmail: profile.email } }))?.id || "",
-                            user.id
-                        );
-                    } catch (e) {
-                        logger.error({ err: e, userId: user.id }, "Failed to start Outlook subscription during login");
+                        await OutlookSyncService.subscribeToMail(connection.id, user.id);
+                    } catch (error) {
+                        logger.error({ error, userId: user.id }, "Failed to subscribe to Outlook mail sync");
+                        // Don't fail the whole auth flow if subscription fails
                     }
                 }
 
@@ -406,13 +434,7 @@ router.get("/microsoft/callback", async (req, res) => {
                     email: profile.email,
                     firstName: profile.firstName,
                     lastName: profile.lastName,
-                    provider: 'MICROSOFT',
-                    accessToken: access_token,
-                    refreshToken: refresh_token,
-                    expiresIn: tokenRes.data.expires_in,
-                    grantedScopes: tokenRes.data.scope,
-                    service: service,
-                    category: (stateParam ? JSON.parse(Buffer.from(stateParam, 'base64').toString('utf-8')).category : 'Personal') || 'Personal'
+                    provider: 'MICROSOFT'
                 },
                 process.env.JWT_SECRET!,
                 { expiresIn: '15m' }
@@ -422,6 +444,7 @@ router.get("/microsoft/callback", async (req, res) => {
         }
 
     } catch (err: any) {
+        console.log(err)
         logger.error({ error: err.response?.data || err.message }, "Microsoft OAuth Error");
         res.redirect(`${CLIENT_URL}/login?error=${err.response?.data?.error}`);
     }
@@ -443,7 +466,7 @@ router.post("/microsoft/link", async (req, res) => {
         const decoded = jwt.verify(token, process.env.JWT_SECRET!) as any;
         if (decoded.provider !== 'MICROSOFT') throw new Error("Invalid provider");
 
-        const { microsoftId, email, firstName, lastName, accessToken, refreshToken, expiresIn, grantedScopes, service, category } = decoded;
+        const { microsoftId, email, firstName, lastName } = decoded;
 
         let user = await prisma.user.findUnique({ where: { whatsappPhone: normalizedPhone } });
 
@@ -518,6 +541,11 @@ router.post("/google/link", async (req, res) => {
 
         if (user) {
             // Link to existing user
+            // Check if email matches (if user has email)
+            if (user.email && user.email !== email) {
+                return res.status(409).json({ error: "Phone number already linked to a different email" });
+            }
+
             // Check if identity already exists
             const existingIdentity = await prisma.userAuthIdentity.findUnique({
                 where: {
